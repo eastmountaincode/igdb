@@ -9,9 +9,13 @@ node_modules/
 .next/
 out/
 
+# Vercel local project metadata
+.vercel/
+
 # Production/build artifacts
 dist/
 build/
+*.tsbuildinfo
 
 # Test and coverage output
 coverage/
@@ -36,3 +40,4 @@ pnpm-debug.log*
 .vscode/
 .idea/
 *.swp
+.turbo/
