@@ -1,0 +1,38 @@
+# macOS metadata
+.DS_Store
+._*
+
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+
+# Production/build artifacts
+dist/
+build/
+
+# Test and coverage output
+coverage/
+.nyc_output/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local env files
+.env
+.env*.local
+
+# Local secrets and keys
+*.key
+*.pem
+
+# Editor and local tooling
+.vscode/
+.idea/
+*.swp
