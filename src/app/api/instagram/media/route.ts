@@ -1,8 +1,24 @@
+import { backendUrl } from "@/backend-proxy";
 import { isAllowedInstagramMediaUrl } from "@/instagram";
 
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const mediaUrl = requestUrl.searchParams.get("url");
+
+  const backend = backendUrl(`/api/instagram/media${requestUrl.search}`);
+  if (backend) {
+    const response = await fetch(backend, {
+      cache: "no-store"
+    });
+
+    return new Response(response.body, {
+      status: response.status,
+      headers: {
+        "cache-control": "no-store",
+        "content-type": response.headers.get("content-type") ?? "application/octet-stream"
+      }
+    });
+  }
 
   if (!mediaUrl || !isAllowedInstagramMediaUrl(mediaUrl)) {
     return new Response("Unsupported media URL.", { status: 400 });

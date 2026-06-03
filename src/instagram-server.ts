@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import {
   isAllowedInstagramMediaUrl,
@@ -8,8 +7,6 @@ import {
   type InstagramMediaReference,
   type InstagramScrapeResult
 } from "@/instagram";
-
-const require = createRequire(import.meta.url);
 
 const INSTAGRAM_HEADERS = {
   accept: "text/html,application/xhtml+xml",
@@ -131,6 +128,11 @@ async function scrapeInstagramWithYtDlp(sourceUrl: string): Promise<Omit<Instagr
 }
 
 async function runYtDlp(sourceUrl: string) {
+  if (!ytDlpCookieBrowser()) {
+    const info = await runYtDlpCommand(sourceUrl, false);
+    return { info, usedBrowserCookies: false };
+  }
+
   try {
     const info = await runYtDlpCommand(sourceUrl, true);
     return { info, usedBrowserCookies: true };
@@ -147,7 +149,8 @@ async function runYtDlp(sourceUrl: string) {
 function runYtDlpCommand(sourceUrl: string, useBrowserCookies: boolean) {
   return new Promise<YtDlpInfo>((resolve, reject) => {
     const args = ["--dump-single-json", "--no-warnings"];
-    if (useBrowserCookies) args.push("--cookies-from-browser", ytDlpCookieBrowser());
+    const cookieBrowser = ytDlpCookieBrowser();
+    if (useBrowserCookies && cookieBrowser) args.push("--cookies-from-browser", cookieBrowser);
     args.push(sourceUrl);
 
     const child = spawn(resolveYtDlpPath(), args, {
@@ -188,19 +191,15 @@ function runYtDlpCommand(sourceUrl: string, useBrowserCookies: boolean) {
 }
 
 function ytDlpCookieBrowser() {
-  return process.env.IGDB_YTDLP_COOKIES_BROWSER || "chrome";
+  return process.env.IGDB_YTDLP_COOKIES_BROWSER;
 }
 
 function resolveYtDlpPath() {
+  const configuredBinary = process.env.IGDB_YTDLP_PATH;
+  if (configuredBinary) return configuredBinary;
+
   const projectBinary = path.join(process.cwd(), "node_modules", "yt-dlp-exec", "bin", "yt-dlp");
   if (existsSync(projectBinary)) return projectBinary;
-
-  try {
-    const packageBinary = (require("yt-dlp-exec/src/constants") as { YOUTUBE_DL_PATH: string }).YOUTUBE_DL_PATH;
-    if (existsSync(packageBinary)) return packageBinary;
-  } catch {
-    // Fall through to the system binary.
-  }
 
   return "yt-dlp";
 }

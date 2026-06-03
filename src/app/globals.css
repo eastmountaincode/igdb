@@ -51,7 +51,7 @@ button.active {
 .shell {
   width: min(1120px, calc(100vw - 32px));
   margin: 0 auto;
-  padding: 28px 0 44px;
+  padding: 22px 0 40px;
 }
 
 h2,
@@ -79,6 +79,30 @@ h2 {
 .top-stats {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   margin-bottom: 18px;
+}
+
+.spec-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-bottom: 14px;
+  border-top: 1px solid #000;
+  border-left: 1px solid #000;
+  font-size: 0.82rem;
+}
+
+.spec-strip span {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  border-right: 1px solid #000;
+  border-bottom: 1px solid #000;
+  padding: 0 9px;
+  color: #555;
+}
+
+.spec-strip b {
+  color: #000;
 }
 
 .stats div,
@@ -113,7 +137,7 @@ h2 {
   border: 1px solid #000;
   border-radius: 0;
   background: #fff;
-  padding: 16px;
+  padding: 14px;
 }
 
 .primary-panel {
@@ -124,7 +148,7 @@ h2 {
   display: flex;
   align-items: end;
   gap: 8px;
-  margin-top: 18px;
+  margin-top: 14px;
   border-bottom: 1px solid #000;
 }
 
@@ -142,7 +166,7 @@ h2 {
 }
 
 .tab-panel {
-  margin-top: 16px;
+  margin-top: 14px;
 }
 
 .read-layout,
@@ -160,17 +184,17 @@ h2 {
 .panel-title {
   display: grid;
   gap: 5px;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .dropzone {
   display: grid;
-  gap: 9px;
-  min-height: 112px;
+  gap: 8px;
+  min-height: 96px;
   align-content: center;
   border: 1px dashed #000;
   border-radius: 0;
-  padding: 16px;
+  padding: 14px;
   cursor: pointer;
 }
 
@@ -267,7 +291,16 @@ h2 {
 
 .video-summary {
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin-top: 16px;
+  margin-top: 14px;
+}
+
+.video-summary.compact-summary {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  font-size: 0.82rem;
+}
+
+.video-summary.compact-summary div {
+  padding: 8px;
 }
 
 .video-list {
@@ -283,7 +316,7 @@ h2 {
 
 .empty-output {
   display: grid;
-  min-height: 220px;
+  min-height: 170px;
   place-items: center;
   border: 1px dashed #000;
   color: #555;
@@ -446,6 +479,7 @@ pre {
   .video-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
 
 @media (max-width: 520px) {
   .shell {
@@ -455,8 +489,14 @@ pre {
 
   .stats,
   .video-summary,
+  .video-summary.compact-summary,
   .media-summary,
   .url-row {
+    grid-template-columns: 1fr;
+  }
+
+  .spec-strip {
+    display: grid;
     grid-template-columns: 1fr;
   }
 }

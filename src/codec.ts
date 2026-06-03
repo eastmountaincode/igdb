@@ -2,6 +2,8 @@ import {
   AUDIO_PROBE_DURATION_SECONDS,
   AUDIO_PROBE_PAYLOAD_BYTES,
   AUDIO_PROBE_SAMPLE_RATE,
+  audioProbeByteCapacityForDuration,
+  audioProbeDurationForByteLength,
   decodeDtmfProbeBytePacketsFromFile,
   synthesizeDtmfProbePackets
 } from "./audio-codec";
@@ -508,16 +510,13 @@ function planHybridSegments(fileSize: number, maxVisualChunksPerVideo: number): 
   const maxVisualBytesPerVideo = maxVisualChunksPerVideo * PAYLOAD_BYTES_PER_IMAGE;
   while (offset < fileSize) {
     const remainingBytes = fileSize - offset;
-    const audioPacketsForSegment = Math.min(
-      AUDIO_PACKETS_PER_VIDEO,
-      Math.floor(Math.max(0, remainingBytes - 1) / AUDIO_PROBE_PAYLOAD_BYTES)
-    );
-    let audioBytesForSegment = Math.min(audioPacketsForSegment * AUDIO_PROBE_PAYLOAD_BYTES, remainingBytes);
-    let visualBytesForSegment = Math.min(remainingBytes - audioBytesForSegment, maxVisualBytesPerVideo);
-    if (visualBytesForSegment <= 0) {
-      visualBytesForSegment = Math.min(remainingBytes, maxVisualBytesPerVideo);
-      audioBytesForSegment = 0;
-    }
+    const maxAudioBytesForSegment = Math.min(AUDIO_PAYLOAD_BYTES, Math.max(0, remainingBytes - 1));
+    const initialVisualBytes = Math.min(remainingBytes - (maxAudioBytesForSegment ? 1 : 0), maxVisualBytesPerVideo);
+    const visualChunkCount = Math.ceil(initialVisualBytes / PAYLOAD_BYTES_PER_IMAGE);
+    const visualDurationSeconds = transmittedFrameCountForDataChunks(visualChunkCount) * (VIDEO_REPEAT_FRAMES / VIDEO_FPS);
+    const audioCapacityBytes = audioProbeByteCapacityForDuration(visualDurationSeconds, AUDIO_PAYLOAD_BYTES);
+    const audioBytesForSegment = Math.min(maxAudioBytesForSegment, Math.max(maxAudioBytesForSegment ? 1 : 0, audioCapacityBytes));
+    const visualBytesForSegment = Math.min(remainingBytes - audioBytesForSegment, maxVisualBytesPerVideo);
     const segmentStart = offset;
     const visualEnd = segmentStart + visualBytesForSegment;
     const audioEnd = visualEnd + audioBytesForSegment;
@@ -547,6 +546,11 @@ function planHybridSegments(fileSize: number, maxVisualChunksPerVideo: number): 
     segments.push({ segmentIndex: segments.length, visualChunks, audioChunks });
   }
   return segments;
+}
+
+function transmittedFrameCountForDataChunks(dataChunkCount: number) {
+  if (dataChunkCount <= 0) return 0;
+  return dataChunkCount + Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE);
 }
 
 async function encodeHybridVideoSegment({
@@ -619,9 +623,7 @@ async function encodeHybridVideoSegment({
     await yieldToBrowser();
   }
 
-  const audioPayloads = segment.audioChunks.map((chunk) =>
-    padAudioPayload(bytes.slice(chunk.payloadStart, chunk.payloadStart + chunk.payloadLength))
-  );
+  const audioPayloads = segment.audioChunks.map((chunk) => bytes.slice(chunk.payloadStart, chunk.payloadStart + chunk.payloadLength));
   const blob = await recordChunkJobsAsMp4(
     renderJobs,
     repeatFrames,
@@ -635,7 +637,7 @@ async function encodeHybridVideoSegment({
   );
   const durationSeconds = Math.max(
     (renderJobs.length * repeatFrames) / VIDEO_FPS,
-    audioPayloads.length * AUDIO_PROBE_DURATION_SECONDS
+    audioPayloads.reduce((sum, payload) => sum + audioProbeDurationForByteLength(payload.length), 0)
   );
   const visualPayloadBytes = segment.visualChunks.reduce((sum, chunk) => sum + chunk.payloadLength, 0);
   const audioPayloadBytes = segment.audioChunks.reduce((sum, chunk) => sum + chunk.payloadLength, 0);
@@ -748,7 +750,14 @@ async function decodeHybridVideoFile(
   }
 
   try {
-    const audioPackets = await decodeDtmfProbeBytePacketsFromFile(file, audioChunkCount, AUDIO_PROBE_PAYLOAD_BYTES);
+    const visualPayloadBytes = visualChunks
+      .filter((chunk) => chunk.ok && chunk.kind === "data" && chunk.chunkIndex < audioStartChunkIndex)
+      .sort((left, right) => left.chunkIndex - right.chunkIndex)
+      .reduce((sum, chunk) => sum + chunk.payload.length, 0);
+    const audioByteLength = Math.min(AUDIO_PROBE_PAYLOAD_BYTES, Math.max(0, template.fileSize - visualPayloadBytes));
+    if (!audioByteLength) return visualChunks;
+
+    const audioPackets = await decodeDtmfProbeBytePacketsFromFile(file, audioChunkCount, audioByteLength);
     const audioChunks = audioPackets.flatMap((audio, index): DecodeResult[] => {
       if (!audio.ok) return [];
       return [{
@@ -1404,7 +1413,8 @@ async function recordChunkJobsAsMp4(
 
   await output.start();
   const chunkDuration = repeatFrames / fps;
-  const audioDurationSeconds = audioPayloads.length * AUDIO_PROBE_DURATION_SECONDS;
+  const audioSamples = audioPayloads.length ? synthesizeDtmfProbePackets(audioPayloads) : null;
+  const audioDurationSeconds = audioSamples ? audioSamples.length / AUDIO_PROBE_SAMPLE_RATE : 0;
   const visualFrames = jobs.length * repeatFrames;
   const visualDurationSeconds = visualFrames / fps;
   const totalAdds = jobs.length + (audioDurationSeconds > visualDurationSeconds ? 1 : 0);
@@ -1426,13 +1436,12 @@ async function recordChunkJobsAsMp4(
     onProgress?.({ phase: "Encoding MP4 chunks", completed: completedAdds, total: totalAdds });
   }
   source.close();
-  if (audioSource && audioPayloads.length) {
-    const samples = synthesizeDtmfProbePackets(audioPayloads);
-    const audioSampleCount = Math.max(samples.length, Math.ceil(currentTime * AUDIO_PROBE_SAMPLE_RATE));
+  if (audioSource && audioSamples) {
+    const audioSampleCount = Math.ceil(currentTime * AUDIO_PROBE_SAMPLE_RATE);
     const audioContext = new AudioContext({ sampleRate: AUDIO_PROBE_SAMPLE_RATE });
     try {
       const audioBuffer = audioContext.createBuffer(1, audioSampleCount, AUDIO_PROBE_SAMPLE_RATE);
-      audioBuffer.copyToChannel(samples, 0);
+      audioBuffer.copyToChannel(audioSamples.slice(0, audioSampleCount), 0);
       await audioSource.add(audioBuffer);
       audioSource.close();
     } finally {

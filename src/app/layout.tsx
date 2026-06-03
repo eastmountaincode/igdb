@@ -3,8 +3,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Instagram Pixel DB",
-  description: "Encode and decode files through Instagram video frames."
+  title: "IGDB",
+  description: "File transport through Instagram video frames."
 };
 
 export default function RootLayout({

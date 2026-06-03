@@ -333,15 +333,15 @@ export function InstagramPixelDbApp() {
 	    throw lastError;
 	  }
 
-	  return (
+  return (
     <main className="shell">
-      <dl className="stats top-stats">
-        <Stat label="Codec">{cap.colors}-color radix</Stat>
-        <Stat label="Frame payload">{formatBytes(cap.payloadBytesPerImage)}</Stat>
-        <Stat label="Effective rate">{formatBytes(cap.videoBytesPerSecond)} / sec</Stat>
-        <Stat label={`${VIDEO_TARGET_SECONDS}s cap`}>{formatBytes(cap.videoTargetBytes)}</Stat>
-        <Stat label="Max audio">{formatBytes(cap.videoMaxAudioPayloadBytes)}</Stat>
-      </dl>
+      <div className="spec-strip" aria-label="Codec settings">
+        <span><b>{cap.colors}-color radix</b></span>
+        <span>{formatBytes(cap.payloadBytesPerImage)}/frame</span>
+        <span>{formatBytes(cap.videoBytesPerSecond)}/s</span>
+        <span>{VIDEO_TARGET_SECONDS}s cap: {formatBytes(cap.videoTargetBytes)}</span>
+        <span>audio max {formatBytes(cap.videoMaxAudioPayloadBytes)}</span>
+      </div>
 
       <nav className="tabbar" aria-label="Mode">
         <button type="button" className={activeTab === "write" ? "active" : ""} onClick={() => setActiveTab("write")}>
@@ -357,7 +357,6 @@ export function InstagramPixelDbApp() {
           <article className="panel read-source">
             <div className="panel-title">
               <h2>Read from Instagram</h2>
-              <p>Paste a post or reel URL. The app resolves the best MP4 for each carousel part, downloads each part, and decodes the file chunks.</p>
             </div>
 
             <div className="url-row">
@@ -402,7 +401,6 @@ export function InstagramPixelDbApp() {
           <article className="panel">
             <div className="panel-title">
               <h2>Recovered file</h2>
-              <p>Decoded chunks appear here. When all chunks are recovered, download the original file.</p>
             </div>
 
             <dl className="media-summary">
@@ -430,7 +428,6 @@ export function InstagramPixelDbApp() {
             <div className="workflow-section">
               <div className="panel-title">
                 <h2>Manual video decode</h2>
-                <p>Use this for a downloaded MP4 when you already have the file locally.</p>
               </div>
               <label className="dropzone compact" htmlFor="video-decode-input">
                 <input id="video-decode-input" type="file" accept="video/*" onChange={handleDecodeVideoSelection} />
@@ -447,7 +444,6 @@ export function InstagramPixelDbApp() {
           <article className="panel write-source">
             <div className="panel-title">
               <h2>Write a file</h2>
-              <p>Choose a local file and generate an Instagram-ready H.264 MP4. Upload the MP4 manually from your Instagram account.</p>
             </div>
 
             <label
@@ -485,9 +481,9 @@ export function InstagramPixelDbApp() {
 
             {encodeProgress ? <ProgressView progress={encodeProgress} active={isEncodingVideo} label="Encoding progress" /> : null}
 
-            <dl className="video-summary">
+            <dl className="video-summary compact-summary">
               <div>
-                <dt>Frame rate</dt>
+                <dt>FPS</dt>
                 <dd>{VIDEO_FPS} fps</dd>
               </div>
               <div>
@@ -499,7 +495,7 @@ export function InstagramPixelDbApp() {
                 <dd>{VIDEO_PARITY_GROUP_SIZE}+1 XOR</dd>
               </div>
               <div>
-                <dt>Planned audio</dt>
+                <dt>Audio</dt>
                 <dd>{selectedPlan ? `${formatBytes(selectedPlan.audioPayloadBytes)} (${selectedPlan.audioPackets} packets)` : "Select a file"}</dd>
               </div>
               <div>
@@ -512,7 +508,6 @@ export function InstagramPixelDbApp() {
           <article className="panel write-output">
             <div className="panel-title">
               <h2>Generated videos</h2>
-              <p>Upload all generated MP4 segments in order. The caption manifest is optional, but useful for demo notes and debugging.</p>
             </div>
 
             {encodedVideos.length ? (
@@ -708,7 +703,7 @@ async function mapWithConcurrency<T>(
 
 function buildVideoDemoPayload() {
   const header = [
-    "FLIPTABLE Instagram Pixel DB video payload",
+    "IGDB video payload",
     "This larger file is encoded across time as repeated color-grid video frames.",
     ""
   ].join("\n");

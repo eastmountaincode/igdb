@@ -1,6 +1,6 @@
 export const AUDIO_PROBE_SAMPLE_RATE = 44_100;
-export const AUDIO_PROBE_SYMBOL_SECONDS = 0.1;
-export const AUDIO_PROBE_SYMBOL_REPEATS = 5;
+export const AUDIO_PROBE_SYMBOL_SECONDS = 0.04;
+export const AUDIO_PROBE_SYMBOL_REPEATS = 3;
 export const AUDIO_PROBE_LOW_TONES = [697, 770, 852, 941] as const;
 export const AUDIO_PROBE_HIGH_TONES = [1209, 1336, 1477, 1633] as const;
 export const AUDIO_PROBE_AMPLITUDE = 0.42;
@@ -55,14 +55,25 @@ export function buildAudioProbePayloadFromBytes(bytes: Uint8Array) {
   const text = TEXT_DECODER.decode(bytes);
   const bitString = bytesToBits(bytes);
   const nibbles = bytesToNibbles(bytes);
-  const symbolCount = PREAMBLE_SYMBOLS.length + bytes.length * (AUDIO_PROBE_SYMBOL_REPEATS * 2 + BYTE_SYNC_SYMBOLS.length) + 2;
   return {
     text,
     bytes,
     bitString,
     nibbles,
-    durationSeconds: Math.max(AUDIO_PROBE_DURATION_SECONDS, symbolCount * AUDIO_PROBE_SYMBOL_SECONDS)
+    durationSeconds: audioProbeDurationForByteLength(bytes.length)
   };
+}
+
+export function audioProbeDurationForByteLength(byteLength: number) {
+  const symbolCount = PREAMBLE_SYMBOLS.length + byteLength * (AUDIO_PROBE_SYMBOL_REPEATS * 2 + BYTE_SYNC_SYMBOLS.length) + 2;
+  return symbolCount * AUDIO_PROBE_SYMBOL_SECONDS;
+}
+
+export function audioProbeByteCapacityForDuration(durationSeconds: number, maxBytes = AUDIO_PROBE_PAYLOAD_BYTES) {
+  const symbolBudget = Math.floor(durationSeconds / AUDIO_PROBE_SYMBOL_SECONDS);
+  const fixedSymbols = PREAMBLE_SYMBOLS.length + 2;
+  const symbolsPerByte = AUDIO_PROBE_SYMBOL_REPEATS * 2 + BYTE_SYNC_SYMBOLS.length;
+  return Math.max(0, Math.min(maxBytes, Math.floor((symbolBudget - fixedSymbols) / symbolsPerByte)));
 }
 
 export function synthesizeDtmfProbe(payload: AudioProbePayload) {
@@ -133,11 +144,12 @@ export async function decodeDtmfProbeBytePacketsFromFile(
 }
 
 export function synthesizeDtmfProbePackets(payloads: Uint8Array[]) {
-  const packetSamples = Math.ceil(AUDIO_PROBE_DURATION_SECONDS * AUDIO_PROBE_SAMPLE_RATE);
-  const samples = new Float32Array(packetSamples * payloads.length);
-  for (let packetIndex = 0; packetIndex < payloads.length; packetIndex++) {
-    const packet = synthesizeDtmfProbe(buildAudioProbePayloadFromBytes(payloads[packetIndex]));
-    samples.set(packet.slice(0, packetSamples), packetIndex * packetSamples);
+  const packets = payloads.map((payload) => synthesizeDtmfProbe(buildAudioProbePayloadFromBytes(payload)));
+  const samples = new Float32Array(packets.reduce((sum, packet) => sum + packet.length, 0));
+  let offset = 0;
+  for (const packet of packets) {
+    samples.set(packet, offset);
+    offset += packet.length;
   }
   return samples;
 }
