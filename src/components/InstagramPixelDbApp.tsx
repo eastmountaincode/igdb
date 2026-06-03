@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from "react";
 import {
   VIDEO_FPS,
   VIDEO_BITRATE,
@@ -19,10 +19,8 @@ import {
   type EncodeVideoProgress,
   type EncodedVideo
 } from "@/codec";
-import { DEFAULT_INSTAGRAM_TEST_URL, type InstagramScrapeResult } from "@/instagram";
 
 type ActiveTab = "read" | "write";
-const PARALLEL_INSTAGRAM_PARTS = 2;
 
 export function InstagramPixelDbApp() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("write");
@@ -31,16 +29,12 @@ export function InstagramPixelDbApp() {
   const [decodedChunks, setDecodedChunks] = useState<DecodeResult[]>([]);
   const [caption, setCaption] = useState("");
   const [decodeMessages, setDecodeMessages] = useState<string[]>([]);
-  const [instagramUrl, setInstagramUrl] = useState(DEFAULT_INSTAGRAM_TEST_URL);
-  const [scrapeResult, setScrapeResult] = useState<InstagramScrapeResult | null>(null);
-  const [scrapeStatus, setScrapeStatus] = useState("");
   const [isEncodingVideo, setIsEncodingVideo] = useState(false);
   const [encodeProgress, setEncodeProgress] = useState<EncodeVideoProgress | null>(null);
   const [decodeProgress, setDecodeProgress] = useState<DecodeVideoProgress | null>(null);
   const [isDecodingVideo, setIsDecodingVideo] = useState(false);
-  const [isScraping, setIsScraping] = useState(false);
-  const [isDecodingScrape, setIsDecodingScrape] = useState(false);
   const [isFileDragActive, setIsFileDragActive] = useState(false);
+  const [isVideoDragActive, setIsVideoDragActive] = useState(false);
   const cap = useMemo(() => capacitySummary(), []);
   const selectedPlan = selectedFile ? estimateVideoPlan(selectedFile.size) : null;
   const selectedSegmentCount = selectedPlan?.segments ?? 0;
@@ -85,13 +79,6 @@ export function InstagramPixelDbApp() {
     selectFile(event.dataTransfer.files?.[0] ?? null);
   }
 
-  async function handleVideoDemoPayload() {
-    const payload = buildVideoDemoPayload();
-    const file = new File([payload], "fliptable-video-demo.txt", { type: "text/plain" });
-    setSelectedFile(file);
-    await generateVideoForFile(file);
-  }
-
   async function generateVideoForFile(file: File) {
     resetDecode();
     setIsEncodingVideo(true);
@@ -112,10 +99,27 @@ export function InstagramPixelDbApp() {
   }
 
   async function handleDecodeVideoSelection(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0] ?? null;
-    resetDecode();
-    if (!file) return;
-    await decodeVideo(file);
+    await decodeVideoFiles([...(event.target.files ?? [])]);
+  }
+
+  function handleVideoDrag(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    if (event.dataTransfer.types.includes("Files")) {
+      setIsVideoDragActive(true);
+    }
+  }
+
+  function handleVideoDragLeave(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setIsVideoDragActive(false);
+    }
+  }
+
+  async function handleVideoDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setIsVideoDragActive(false);
+    await decodeVideoFiles([...event.dataTransfer.files]);
   }
 
   async function handleDecodeGeneratedVideo() {
@@ -164,20 +168,38 @@ export function InstagramPixelDbApp() {
     }
   }
 
-  async function decodeVideo(file: File) {
+  async function decodeVideoFiles(files: File[]) {
+    const videos = files.filter((file) => file.type.startsWith("video/") || file.name.toLowerCase().endsWith(".mp4"));
+    resetDecode();
+    if (!videos.length) return;
+
     setIsDecodingVideo(true);
-    setDecodeProgress({ phase: "Loading video", completed: 0, total: 1 });
+    const recoveredByIndex = new Map<number, DecodeResult>();
+    const messages: string[] = [];
     try {
-      const chunks = await decodeVideoFile(file, setDecodeProgress);
-      setDecodedChunks(chunks);
-      setDecodeMessages([
-        `Sampled ${file.name}. Recovered ${chunks.length ? `${chunks.length}/${chunks[0].totalChunks}` : "0"} chunks.`
-      ]);
-      setDecodeProgress({ phase: "Decode complete", completed: 1, total: 1 });
-      return chunks;
+      for (let index = 0; index < videos.length; index++) {
+        const file = videos[index];
+        const chunks = await decodeVideoFile(file, (progress) =>
+          setDecodeProgress({
+            ...progress,
+            phase: videos.length > 1 ? `Video ${index + 1}/${videos.length}: ${progress.phase.toLowerCase()}` : progress.phase
+          })
+        );
+        const recoveredChunks = chunks.filter((chunk) => chunk.ok && chunk.kind === "data");
+        for (const chunk of recoveredChunks) {
+          if (!recoveredByIndex.has(chunk.chunkIndex)) recoveredByIndex.set(chunk.chunkIndex, chunk);
+        }
+        const mergedChunks = [...recoveredByIndex.values()].sort((left, right) => left.chunkIndex - right.chunkIndex);
+        setDecodedChunks(mergedChunks);
+        messages.push(
+          `${file.name}: recovered ${chunks.length ? `${recoveredChunks.length}/${chunks[0].totalChunks}` : "0"} chunks; merged ${mergedChunks.length}.`
+        );
+        setDecodeMessages([...messages]);
+      }
+      setDecodeProgress({ phase: "Decode complete", completed: videos.length, total: videos.length });
     } catch (error) {
-      setDecodeMessages([`Video decode failed: ${error instanceof Error ? error.message : String(error)}`]);
-      return [];
+      setDecodeMessages([...messages, `Video decode failed: ${error instanceof Error ? error.message : String(error)}`]);
+      setDecodeProgress({ phase: "Decode failed", completed: 1, total: 1 });
     } finally {
       setIsDecodingVideo(false);
     }
@@ -191,147 +213,6 @@ export function InstagramPixelDbApp() {
       `Reassembled ${assembled.fileName}. SHA-256 ${assembled.hashOk ? "OK" : "MISMATCH"}.`
     ]);
   }
-
-  async function scrapeInstagramSource() {
-    setIsScraping(true);
-    setScrapeStatus("");
-    setScrapeResult(null);
-    try {
-      const response = await fetch("/api/instagram/scrape", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({ url: instagramUrl })
-      });
-      const body = (await response.json()) as InstagramScrapeResult | { error?: string };
-      if (!response.ok) {
-        throw new Error("error" in body && body.error ? body.error : `Scrape failed with HTTP ${response.status}.`);
-      }
-      const result = body as InstagramScrapeResult;
-      setScrapeResult(result);
-      setScrapeStatus("Scrape complete.");
-      return result;
-    } catch (error) {
-      setScrapeStatus(error instanceof Error ? error.message : String(error));
-      return null;
-    } finally {
-      setIsScraping(false);
-    }
-  }
-
-  async function handleScrape() {
-    await scrapeInstagramSource();
-  }
-
-  async function handleFetchAndDecodeSource() {
-    resetDecode();
-    const result = await scrapeInstagramSource();
-    if (result?.videos.length) await decodeScrapedVideos(result);
-  }
-
-  async function handleDecodeScrapedVideos() {
-    if (!scrapeResult?.videos.length) return;
-    resetDecode();
-    await decodeScrapedVideos(scrapeResult);
-  }
-
-  async function decodeScrapedVideos(result: InstagramScrapeResult) {
-    if (!result.videos.length) return;
-
-    setIsDecodingScrape(true);
-    setDecodeProgress({ phase: "Starting decode", completed: 0, total: result.videos.length });
-    const recoveredByIndex = new Map<number, DecodeResult>();
-    const messages: string[] = new Array(result.videos.length).fill("");
-    const partProgress = result.videos.map<DecodeVideoProgress>(() => ({ phase: "Queued", completed: 0, total: 1 }));
-    const publishProgress = () => {
-      const total = partProgress.reduce((sum, progress) => sum + Math.max(progress.total, 1), 0);
-      const completed = partProgress.reduce((sum, progress) => sum + Math.min(progress.completed, Math.max(progress.total, 1)), 0);
-      const active = partProgress
-        .map((progress, index) => ({ progress, index }))
-        .filter(({ progress }) => progress.completed < progress.total && progress.phase !== "Queued")
-        .slice(0, PARALLEL_INSTAGRAM_PARTS)
-        .map(({ progress, index }) => `part ${index + 1}: ${progress.phase.toLowerCase()}`)
-        .join("; ");
-      setDecodeProgress({
-        phase: active ? `Decoding ${result.videos.length} parts: ${active}` : "Decoding parts",
-        completed,
-        total
-      });
-    };
-    const publishMessages = () => setDecodeMessages(messages.filter(Boolean));
-    try {
-      await mapWithConcurrency(
-        result.videos,
-        Math.min(PARALLEL_INSTAGRAM_PARTS, result.videos.length),
-        async (media, index) => {
-          try {
-            partProgress[index] = { phase: `Downloading part ${index + 1}`, completed: 0, total: 1 };
-            publishProgress();
-            const response = await fetch(`/api/instagram/media?url=${encodeURIComponent(media.url)}`);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const blob = await response.blob();
-            const chunks = await decodeInstagramPart(blob, index, result.videos.length, (progress) => {
-              partProgress[index] = progress;
-              publishProgress();
-            });
-            const recoveredChunks = chunks.filter((chunk) => chunk.ok && chunk.kind === "data");
-            for (const chunk of recoveredChunks) {
-              if (!recoveredByIndex.has(chunk.chunkIndex)) recoveredByIndex.set(chunk.chunkIndex, chunk);
-            }
-            const mergedChunks = [...recoveredByIndex.values()].sort((left, right) => left.chunkIndex - right.chunkIndex);
-            setDecodedChunks(mergedChunks);
-            messages[index] =
-              `part ${index + 1}: recovered ${chunks.length ? `${recoveredChunks.length}/${chunks[0].totalChunks}` : "0"} chunks${
-                media.width && media.height ? ` from ${media.width}x${media.height}` : ""
-              }; merged ${mergedChunks.length}.`;
-            partProgress[index] = { phase: `Part ${index + 1} complete`, completed: 1, total: 1 };
-            publishProgress();
-            publishMessages();
-          } catch (error) {
-            messages[index] = `part ${index + 1}: ${error instanceof Error ? error.message : String(error)}`;
-            partProgress[index] = { phase: `Part ${index + 1} failed`, completed: 1, total: 1 };
-            publishProgress();
-            publishMessages();
-          }
-        }
-      );
-      setDecodeProgress({ phase: "Decode complete", completed: result.videos.length, total: result.videos.length });
-    } catch (error) {
-      setDecodeMessages([...messages.filter(Boolean), `decode failed: ${error instanceof Error ? error.message : String(error)}`]);
-      setDecodeProgress({ phase: "Decode failed", completed: 1, total: 1 });
-    } finally {
-      setIsDecodingScrape(false);
-	    }
-	  }
-
-	  async function decodeInstagramPart(
-	    blob: Blob,
-	    index: number,
-	    totalParts: number,
-	    onPartProgress: (progress: DecodeVideoProgress) => void
-	  ) {
-	    let lastError: unknown;
-	    for (let attempt = 1; attempt <= 2; attempt++) {
-	      try {
-	        if (attempt > 1) {
-	          onPartProgress({ phase: `Retrying part ${index + 1}/${totalParts}`, completed: 0, total: 1 });
-	        }
-	        const file = new File([blob], `instagram-part-${String(index + 1).padStart(2, "0")}.mp4`, {
-	          type: blob.type || "video/mp4"
-	        });
-	        return await decodeVideoFile(file, (progress) =>
-	          onPartProgress({
-	            ...progress,
-	            phase: `Part ${index + 1}/${totalParts}: ${progress.phase.toLowerCase()}`
-	          })
-	        );
-	      } catch (error) {
-	        lastError = error;
-	      }
-	    }
-	    throw lastError;
-	  }
 
   return (
     <main className="shell">
@@ -356,46 +237,21 @@ export function InstagramPixelDbApp() {
         <section className="tab-panel read-layout">
           <article className="panel read-source">
             <div className="panel-title">
-              <h2>Read from Instagram</h2>
+              <h2>Read video</h2>
             </div>
 
-            <div className="url-row">
-              <input
-                type="url"
-                value={instagramUrl}
-                onChange={(event) => setInstagramUrl(event.target.value)}
-                placeholder="https://www.instagram.com/p/..."
-                aria-label="Instagram URL"
-              />
-            </div>
-
-            <div className="button-row read-actions">
-              <button
-                type="button"
-                onClick={handleFetchAndDecodeSource}
-                disabled={isScraping || isDecodingScrape || isDecodingVideo || !instagramUrl.trim()}
-              >
-                {isScraping ? "Resolving..." : isDecodingScrape || isDecodingVideo ? "Decoding..." : "Fetch and decode"}
-              </button>
-            </div>
-
-            <details className="advanced-actions">
-              <summary>Advanced</summary>
-              <div className="button-row">
-                <button type="button" onClick={handleScrape} disabled={isScraping || !instagramUrl.trim()}>
-                  {isScraping ? "Resolving..." : "Resolve MP4 parts"}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDecodeScrapedVideos}
-                  disabled={isDecodingScrape || isDecodingVideo || !scrapeResult?.videos.length}
-                >
-                  {isDecodingScrape || isDecodingVideo ? "Decoding..." : "Decode resolved parts"}
-                </button>
-              </div>
-            </details>
-
-            <ScrapeResultView result={scrapeResult} status={scrapeStatus} />
+            <label
+              className={`dropzone video-dropzone${isVideoDragActive ? " drag-active" : ""}`}
+              htmlFor="video-decode-input"
+              onDragEnter={handleVideoDrag}
+              onDragOver={handleVideoDrag}
+              onDragLeave={handleVideoDragLeave}
+              onDrop={handleVideoDrop}
+            >
+              <input id="video-decode-input" type="file" accept="video/*,.mp4" multiple onChange={handleDecodeVideoSelection} />
+              <span>Choose MP4</span>
+              <strong>{expectedChunks ? `${recoveredChunks} / ${expectedChunks} chunks recovered` : "No video decoded"}</strong>
+            </label>
           </article>
 
           <article className="panel">
@@ -420,23 +276,8 @@ export function InstagramPixelDbApp() {
               </button>
             </div>
 
-            {decodeProgress ? (
-              <ProgressView progress={decodeProgress} active={isDecodingVideo || isDecodingScrape} label="Decoding progress" />
-            ) : null}
+            {decodeProgress ? <ProgressView progress={decodeProgress} active={isDecodingVideo} label="Decoding progress" /> : null}
             <pre>{decodeLog || "No decoded chunks yet."}</pre>
-
-            <div className="workflow-section">
-              <div className="panel-title">
-                <h2>Manual video decode</h2>
-              </div>
-              <label className="dropzone compact" htmlFor="video-decode-input">
-                <input id="video-decode-input" type="file" accept="video/*" onChange={handleDecodeVideoSelection} />
-                <span>Choose video</span>
-                <strong>
-                  {expectedChunks ? `${recoveredChunks} / ${expectedChunks} chunks recovered` : "No video decoded"}
-                </strong>
-              </label>
-            </div>
           </article>
         </section>
       ) : (
@@ -467,9 +308,6 @@ export function InstagramPixelDbApp() {
               </label>
 
             <div className="button-row">
-              <button type="button" onClick={handleVideoDemoPayload} disabled={isEncodingVideo}>
-                Load demo payload
-              </button>
               <button
                 type="button"
                 onClick={() => selectedFile && generateVideoForFile(selectedFile)}
@@ -570,57 +408,6 @@ export function InstagramPixelDbApp() {
   );
 }
 
-function ScrapeResultView({
-  result,
-  status
-}: {
-  result: InstagramScrapeResult | null;
-  status: string;
-}) {
-  if (!result && !status) return null;
-
-  return (
-    <div className="scrape-result">
-      {status ? <strong>{status}</strong> : null}
-      {result ? (
-        <>
-          <dl className="media-summary">
-            <div>
-              <dt>MP4 parts</dt>
-              <dd>{result.videos.length}</dd>
-            </div>
-            <div>
-              <dt>Images ignored</dt>
-              <dd>{result.images.length}</dd>
-            </div>
-          </dl>
-          {result.captionText ? <p className="caption-preview">{result.captionText}</p> : null}
-          {result.warnings.length ? (
-            <ul className="warnings">
-              {result.warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
-          ) : null}
-          <ol className="media-list">
-            {result.videos.slice(0, 12).map((media) => (
-              <li key={media.url}>
-                <span>
-                  {media.width && media.height ? `${media.width}x${media.height}` : media.kind}
-                  {media.source ? ` ${media.source}` : ""}
-                </span>
-                <a href={media.url} target="_blank" rel="noreferrer">
-                  {media.url}
-                </a>
-              </li>
-            ))}
-          </ol>
-        </>
-      ) : null}
-    </div>
-  );
-}
-
 function ProgressView({
   progress,
   active,
@@ -673,53 +460,6 @@ function ProgressView({
       </span>
     </div>
   );
-}
-
-function Stat({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{children}</dd>
-    </div>
-  );
-}
-
-async function mapWithConcurrency<T>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T, index: number) => Promise<void>
-) {
-  let nextIndex = 0;
-  const workerCount = Math.max(1, Math.min(concurrency, items.length));
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (nextIndex < items.length) {
-        const index = nextIndex++;
-        await fn(items[index], index);
-      }
-    })
-  );
-}
-
-function buildVideoDemoPayload() {
-  const header = [
-    "IGDB video payload",
-    "This larger file is encoded across time as repeated color-grid video frames.",
-    ""
-  ].join("\n");
-  const rows: string[] = [];
-  for (let i = 0; i < 7500; i++) {
-    rows.push(
-      JSON.stringify({
-        row: i,
-        frameGroup: Math.floor(i / 48),
-        file: "fliptable-video-demo.txt",
-        phrase: "instagram video as public filesystem",
-        checksumSeed: (i * 2246822519) >>> 0
-      })
-    );
-  }
-  return `${header}${rows.join("\n")}\n`;
 }
 
 function generatedVideoFileName(sourceName?: string, segmentIndex = 0, totalSegments = 1) {

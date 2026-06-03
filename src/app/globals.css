@@ -117,10 +117,8 @@ h2 {
 .stats dt,
 .video-summary dt,
 .media-summary dt,
-.panel-title p,
 .video-meta span,
-.working-line,
-.caption-preview {
+.working-line {
   color: #555;
   font-size: 0.88rem;
 }
@@ -323,18 +321,6 @@ h2 {
   font-weight: 700;
 }
 
-.workflow-section {
-  margin-top: 16px;
-  border-top: 1px solid #000;
-  padding-top: 16px;
-}
-
-.workflow-section.first-workflow-section {
-  margin-top: 0;
-  border-top: 0;
-  padding-top: 0;
-}
-
 .video-output video {
   width: 100%;
   max-width: 340px;
@@ -369,84 +355,11 @@ h2 {
   min-width: 0;
 }
 
-.url-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-}
-
-.read-source .url-row {
-  grid-template-columns: 1fr;
-}
-
-.read-actions {
-  align-items: stretch;
-}
-
-.read-actions button {
-  min-width: 126px;
-}
-
-.advanced-actions {
-  margin-top: 10px;
-}
-
-.advanced-actions summary {
-  width: fit-content;
-  cursor: pointer;
-  color: #555;
-  font-size: 0.88rem;
-  font-weight: 700;
-}
-
-.url-row input {
-  min-width: 0;
-  min-height: 40px;
-  border: 1px solid #000;
-  border-radius: 0;
-  background: #fff;
-  color: #000;
-  padding: 0 10px;
-}
-
-.scrape-result {
-  display: grid;
-  gap: 10px;
-  margin-top: 12px;
-}
-
 .media-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   border-top: 1px solid #000;
   border-left: 1px solid #000;
-}
-
-.warnings,
-.media-list {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding-left: 20px;
-}
-
-.warnings {
-  color: #000;
-}
-
-.media-list li {
-  min-width: 0;
-}
-
-.media-list span {
-  display: inline-block;
-  min-width: 48px;
-  font-weight: 700;
-}
-
-.media-list a {
-  color: #000;
-  overflow-wrap: anywhere;
 }
 
 textarea,
@@ -490,8 +403,7 @@ pre {
   .stats,
   .video-summary,
   .video-summary.compact-summary,
-  .media-summary,
-  .url-row {
+  .media-summary {
     grid-template-columns: 1fr;
   }
 
