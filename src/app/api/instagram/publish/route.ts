@@ -1,4 +1,5 @@
 import { publishInstagramVideos } from "@/lib/instagram-publisher";
+import { MAX_SOURCE_FILE_BYTES, MAX_SOURCE_FILE_LABEL } from "@/upload-limits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,6 +36,9 @@ export async function POST(request: Request) {
     const note = String(form.get("note") ?? "").trim();
     if (!Number.isSafeInteger(originalSize) || originalSize < 0) {
       return Response.json({ error: "Invalid original file size." }, { status: 400 });
+    }
+    if (originalSize > MAX_SOURCE_FILE_BYTES) {
+      return Response.json({ error: `Files must be ${MAX_SOURCE_FILE_LABEL} or smaller.` }, { status: 413 });
     }
     if (note.length > MAX_NOTE_LENGTH) {
       return Response.json({ error: `Note must be ${MAX_NOTE_LENGTH} characters or fewer.` }, { status: 400 });

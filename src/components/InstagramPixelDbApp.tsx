@@ -1,17 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type DragEvent } from "react";
 import {
-  VIDEO_FPS,
-  VIDEO_BITRATE,
-  VIDEO_PARITY_GROUP_SIZE,
-  VIDEO_REPEAT_FRAMES,
-  VIDEO_TARGET_SECONDS,
-  capacitySummary,
   decodeVideoFile,
   downloadBlob,
   encodeFileAsVideos,
-  estimateVideoPlan,
   formatBytes,
   reassemble,
   type DecodeResult,
@@ -19,6 +12,8 @@ import {
   type EncodeVideoProgress,
   type EncodedVideo
 } from "@/codec";
+import { buildInstagramCaption } from "@/instagram-caption";
+import { MAX_SOURCE_FILE_BYTES, MAX_SOURCE_FILE_LABEL } from "@/upload-limits";
 
 type ActiveTab = "read" | "write";
 
@@ -38,9 +33,15 @@ export function InstagramPixelDbApp() {
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishMessage, setPublishMessage] = useState("");
   const [publishedUrl, setPublishedUrl] = useState("");
-  const cap = useMemo(() => capacitySummary(), []);
-  const selectedPlan = selectedFile ? estimateVideoPlan(selectedFile.size) : null;
-  const selectedSegmentCount = selectedPlan?.segments ?? 0;
+  const fileTooLarge = Boolean(selectedFile && selectedFile.size > MAX_SOURCE_FILE_BYTES);
+  const captionPreview = selectedFile
+    ? buildInstagramCaption({
+        name: selectedFile.name,
+        type: selectedFile.type || "application/octet-stream",
+        size: selectedFile.size,
+        note: publishNote
+      })
+    : "";
 
   const recoveredChunks = decodedChunks.filter((chunk) => chunk.ok && chunk.kind === "data").length;
   const expectedChunks = decodedChunks[0]?.totalChunks ?? 0;
@@ -125,52 +126,6 @@ export function InstagramPixelDbApp() {
     await decodeVideoFiles([...event.dataTransfer.files]);
   }
 
-  async function handleDecodeGeneratedVideo() {
-    if (!encodedVideos.length) return;
-    resetDecode();
-    setIsDecodingVideo(true);
-    const recoveredByIndex = new Map<number, DecodeResult>();
-    const messages: string[] = [];
-    try {
-      for (const video of encodedVideos) {
-        const file = new File(
-          [video.blob],
-          generatedVideoFileName(selectedFile?.name, video.segmentIndex, video.totalSegments),
-          {
-            type: video.blob.type || "video/mp4"
-          }
-        );
-        const chunks = await decodeVideoFile(file, (progress) =>
-          setDecodeProgress({
-            ...progress,
-            phase:
-              video.totalSegments > 1
-                ? `Segment ${video.segmentIndex + 1}/${video.totalSegments}: ${progress.phase.toLowerCase()}`
-                : progress.phase
-          })
-        );
-        for (const chunk of chunks) {
-          if (chunk.ok && chunk.kind === "data" && !recoveredByIndex.has(chunk.chunkIndex)) {
-            recoveredByIndex.set(chunk.chunkIndex, chunk);
-          }
-        }
-        const recovered = [...recoveredByIndex.values()].sort((left, right) => left.chunkIndex - right.chunkIndex);
-        setDecodedChunks(recovered);
-        messages.push(
-          `segment ${video.segmentIndex + 1}: recovered ${
-            chunks.length ? `${chunks.filter((chunk) => chunk.ok && chunk.kind === "data").length}/${chunks[0].totalChunks}` : "0"
-          } chunks; merged ${recovered.length}.`
-        );
-        setDecodeMessages([...messages]);
-      }
-      setDecodeProgress({ phase: "Decode complete", completed: encodedVideos.length, total: encodedVideos.length });
-    } catch (error) {
-      setDecodeMessages([...messages, `Generated video decode failed: ${error instanceof Error ? error.message : String(error)}`]);
-    } finally {
-      setIsDecodingVideo(false);
-    }
-  }
-
   async function decodeVideoFiles(files: File[]) {
     const videos = files.filter((file) => file.type.startsWith("video/") || file.name.toLowerCase().endsWith(".mp4"));
     resetDecode();
@@ -251,18 +206,6 @@ export function InstagramPixelDbApp() {
 
   return (
     <main className="shell">
-      <table className="codec-table" aria-label="codec settings">
-        <tbody>
-          <tr>
-            <td><b>{cap.colors}-color radix</b></td>
-            <td>{formatBytes(cap.payloadBytesPerImage)}/frame</td>
-            <td>{formatBytes(cap.videoBytesPerSecond)}/s</td>
-            <td>{VIDEO_TARGET_SECONDS}s cap: {formatBytes(cap.videoTargetBytes)}</td>
-            <td>audio max {formatBytes(cap.videoMaxAudioPayloadBytes)}</td>
-          </tr>
-        </tbody>
-      </table>
-
       <nav className="tabbar" aria-label="Mode">
         <button type="button" className={activeTab === "write" ? "active" : ""} onClick={() => setActiveTab("write")}>
           write
@@ -317,6 +260,7 @@ export function InstagramPixelDbApp() {
         <section className="tab-panel write-layout">
           <fieldset className="panel write-source">
             <legend>write</legend>
+            <p className="file-limit">maximum file size: {MAX_SOURCE_FILE_LABEL}</p>
             <label
               className={`dropzone${isFileDragActive ? " drag-active" : ""}`}
               htmlFor="file-input"
@@ -329,19 +273,18 @@ export function InstagramPixelDbApp() {
               <span>choose file</span>
                 <strong>
                   {selectedFile
-                    ? `${selectedFile.name} (${formatBytes(selectedFile.size)}) - ${selectedSegmentCount} ${pluralize(
-                        "video",
-                        selectedSegmentCount
-                      )}, ${selectedPlan?.audioPackets ?? 0} audio ${pluralize("packet", selectedPlan?.audioPackets ?? 0)}`
+                    ? `${selectedFile.name} (${formatBytes(selectedFile.size)})`
                     : "no file selected"}
                 </strong>
               </label>
+
+            {fileTooLarge ? <p className="file-error" role="alert">file exceeds the {MAX_SOURCE_FILE_LABEL} maximum</p> : null}
 
             <div className="button-row">
               <button
                 type="button"
                 onClick={() => selectedFile && generateVideoForFile(selectedFile)}
-                disabled={!selectedFile || isEncodingVideo}
+                disabled={!selectedFile || fileTooLarge || isEncodingVideo}
               >
                 {isEncodingVideo ? "encoding..." : "generate MP4"}
               </button>
@@ -349,84 +292,10 @@ export function InstagramPixelDbApp() {
 
             {encodeProgress ? <ProgressView progress={encodeProgress} active={isEncodingVideo} label="Encoding progress" /> : null}
 
-            <dl className="video-summary compact-summary">
-              <div>
-                <dt>fps</dt>
-                <dd>{VIDEO_FPS} fps</dd>
-              </div>
-              <div>
-                <dt>repeat</dt>
-                <dd>{VIDEO_REPEAT_FRAMES} frames</dd>
-              </div>
-              <div>
-                <dt>parity</dt>
-                <dd>{VIDEO_PARITY_GROUP_SIZE}+1 XOR</dd>
-              </div>
-              <div>
-                <dt>audio</dt>
-                <dd>{selectedPlan ? `${formatBytes(selectedPlan.audioPayloadBytes)} (${selectedPlan.audioPackets} packets)` : "—"}</dd>
-              </div>
-              <div>
-                <dt>bitrate</dt>
-                <dd>{Math.round(VIDEO_BITRATE / 1_000_000)} Mbps</dd>
-              </div>
-            </dl>
           </fieldset>
 
           <fieldset className="panel write-output">
-            <legend>generated videos</legend>
-            {encodedVideos.length ? (
-              <div className="video-list">
-	                <div className="button-row">
-	                  <button type="button" onClick={handleDecodeGeneratedVideo} disabled={isDecodingVideo}>
-	                    {encodedVideos.length > 1 ? "verify all" : "verify decode"}
-	                  </button>
-	                  {encodedVideos.length > 1 ? (
-	                    <button
-	                      type="button"
-	                      onClick={() =>
-	                        encodedVideos.forEach((video) =>
-	                          downloadBlob(video.blob, generatedVideoFileName(selectedFile?.name, video.segmentIndex, video.totalSegments))
-	                        )
-	                      }
-	                    >
-	                      download all MP4s
-	                    </button>
-	                  ) : null}
-	                </div>
-	                {encodedVideos.map((video) => (
-	                  <figure className="video-output" key={video.url}>
-	                    <video src={video.url} controls muted playsInline />
-	                    <figcaption className="video-output-footer">
-	                      <div className="video-meta">
-	                        <strong>
-	                          part {video.segmentIndex + 1} of {video.totalSegments}
-	                        </strong>
-	                        <span>{formatBytes(video.payloadBytes)} payload</span>
-	                        <span>
-	                          data chunks {video.dataChunkStart + 1}-{video.dataChunkEnd + 1}, {video.chunkCount} transmitted chunks,{" "}
-	                          {video.durationSeconds.toFixed(1)} seconds
-	                        </span>
-	                        {video.audioPacketCount ? (
-	                          <span>
-	                            audio {formatBytes(video.audioPayloadBytes ?? 0)}, {video.audioPacketCount} packets
-	                          </span>
-	                        ) : null}
-	                      </div>
-	                      <button
-	                        type="button"
-	                        onClick={() => downloadBlob(video.blob, generatedVideoFileName(selectedFile?.name, video.segmentIndex, video.totalSegments))}
-	                      >
-	                        {encodedVideos.length > 1 ? `download part ${video.segmentIndex + 1}` : "download MP4"}
-	                      </button>
-	                    </figcaption>
-	                  </figure>
-	                ))}
-              </div>
-            ) : null}
-
-            <fieldset className="publish-card">
-              <legend>publish to @normal_shopkeep</legend>
+            <legend>publish to @normal_shopkeep</legend>
               <label className="field-label" htmlFor="instagram-note">
                 optional note
                 <textarea
@@ -438,10 +307,15 @@ export function InstagramPixelDbApp() {
                 />
               </label>
 
+              <label className="field-label" htmlFor="instagram-caption-preview">
+                caption
+                <textarea id="instagram-caption-preview" readOnly value={captionPreview} placeholder="choose a file" />
+              </label>
+
               <div className="button-row">
                 <button
                   type="button"
-                  disabled={!selectedFile || !encodedVideos.length || isPublishing}
+                  disabled={!selectedFile || fileTooLarge || !encodedVideos.length || isPublishing}
                   onClick={handlePublishToInstagram}
                 >
                   {isPublishing ? "publishing..." : "publish to Instagram"}
@@ -450,7 +324,6 @@ export function InstagramPixelDbApp() {
 
               {publishMessage ? <p className="publish-status" role="status">{publishMessage}</p> : null}
               {publishedUrl ? <a className="published-link" href={publishedUrl} target="_blank" rel="noreferrer">open Instagram post</a> : null}
-            </fieldset>
           </fieldset>
         </section>
       )}

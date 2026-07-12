@@ -108,19 +108,6 @@ table {
   padding: 1rem 0 2rem;
 }
 
-.codec-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.9rem;
-}
-
-.codec-table td {
-  border: 1px solid #000;
-  padding: 0.2rem 0.4rem;
-  text-align: left;
-  white-space: nowrap;
-}
-
 .tabbar {
   display: flex;
   gap: 0.35rem;
@@ -170,9 +157,17 @@ table {
 }
 
 .dropzone strong,
-.video-meta span,
 dd {
   overflow-wrap: anywhere;
+}
+
+.file-limit {
+  margin-bottom: 0.5rem;
+}
+
+.file-error {
+  margin-top: 0.4rem;
+  font-weight: bold;
 }
 
 .button-row {
@@ -213,13 +208,11 @@ dd {
 
 .progress-detail,
 .publish-status,
-.video-meta span,
 dt {
   color: #444;
   font-size: 0.9rem;
 }
 
-.video-summary,
 .media-summary {
   display: grid;
   margin-top: 0.75rem;
@@ -227,64 +220,26 @@ dt {
   border-left: 1px dotted #000;
 }
 
-.video-summary {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-}
-
 .media-summary {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.video-summary div,
 .media-summary div {
   border-right: 1px dotted #000;
   border-bottom: 1px dotted #000;
   padding: 0.35rem;
 }
 
-.video-summary dd,
 .media-summary dd {
   margin-top: 0.1rem;
 }
 
-.video-list {
-  display: grid;
-  gap: 0.75rem;
-}
-
-.video-output {
-  display: grid;
-  gap: 0.4rem;
-  padding-top: 0.75rem;
-  border-top: 1px dotted #000;
-}
-
-.video-output video {
-  width: 100%;
-  max-width: 21rem;
-  aspect-ratio: 1;
-  border: 1px solid #000;
-  background: #000;
-}
-
-.video-output-footer,
-.video-meta {
-  display: grid;
-  gap: 0.2rem;
-}
-
-.video-output-footer button {
-  width: fit-content;
-  margin-top: 0.25rem;
-}
-
-.publish-card {
+.write-output {
   display: grid;
   gap: 0.65rem;
-  margin-top: 1rem;
 }
 
-.publish-card .button-row {
+.write-output .button-row {
   margin-top: 0;
 }
 
@@ -309,16 +264,6 @@ pre {
     grid-template-columns: 1fr;
   }
 
-  .codec-table,
-  .codec-table tbody,
-  .codec-table tr,
-  .codec-table td {
-    display: block;
-  }
-
-  .codec-table td + td {
-    border-top: 0;
-  }
 }
 
 @media (max-width: 34rem) {
@@ -327,7 +272,6 @@ pre {
     padding-top: 0.5rem;
   }
 
-  .video-summary,
   .media-summary {
     grid-template-columns: 1fr;
   }
