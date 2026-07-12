@@ -22,7 +22,7 @@ Branches:
 - `feature/instagram-api-upload`: Meta Instagram API publishing integration.
 - `experiment/encode-performance`: iterative encoding-speed and payload-capacity research; preserve byte-perfect recovery and publishing behavior while benchmarking each codec change.
 
-The accepted performance profile is 720px, 4px cells, six colors, three repeats, compact XOR parity 16+1 headers, 6 Mbps H.264 with constant bitrate and realtime latency mode, and two-way segment concurrency. Browsers without CBR support fall back to the separately Instagram-verified realtime VBR mode. Decoding remains backward-compatible with the older array-based parity headers. Do not weaken it based on local decoding alone; every codec change must survive an Instagram publish/download round trip and final SHA-256 verification.
+The accepted performance profile is 720px, 4px cells, six colors, three repeats, compact XOR parity 16+1 headers, 6 Mbps H.264 with constant bitrate and realtime latency mode, and two-way segment concurrency. Symbol conversion uses independent 8-byte/25-symbol radix blocks rather than one grid-sized `BigInt`; this is the primary encoding-speed optimization. Browsers without CBR support fall back to the separately Instagram-verified realtime VBR mode. Decoding remains backward-compatible with both the older whole-grid symbol conversion and array-based parity headers. Do not weaken it based on local decoding alone; every codec change must survive an Instagram publish/download round trip and final SHA-256 verification.
 
 The intended boundary is:
 

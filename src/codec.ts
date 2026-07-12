@@ -23,8 +23,10 @@ export const palette = [
 ] as const;
 const SYMBOL_COUNT = GRID_CELLS * GRID_CELLS;
 const SYMBOL_RADIX = palette.length;
+const SYMBOL_BLOCK_BYTES = 8;
+const SYMBOL_BLOCK_SIZE = 25;
 export const HEADER_BYTES = 512;
-export const RAW_CHUNK_BYTES = Math.floor((SYMBOL_COUNT * Math.log2(SYMBOL_RADIX)) / 8);
+export const RAW_CHUNK_BYTES = Math.floor(SYMBOL_COUNT / SYMBOL_BLOCK_SIZE) * SYMBOL_BLOCK_BYTES;
 export const PAYLOAD_BYTES_PER_IMAGE = RAW_CHUNK_BYTES - HEADER_BYTES;
 export const VIDEO_FPS = 30;
 export const VIDEO_REPEAT_FRAMES = 3;
@@ -997,8 +999,19 @@ function readSymbolsFromImageData(imageData: Uint8ClampedArray) {
 }
 
 function decodeSymbols(symbols: number[]): DecodeResult {
-  const allBytes = bitsToBytes(symbols);
+  try {
+    return decodeChunkBytes(bitsToBytes(symbols));
+  } catch {
+    return decodeChunkBytes(legacyBitsToBytes(symbols));
+  }
+}
+
+function decodeChunkBytes(allBytes: Uint8Array): DecodeResult {
+  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || allBytes[4] !== VERSION) {
+    throw new Error("Unknown video payload format.");
+  }
   const headerLength = readUint16(allBytes, 5);
+  if (headerLength <= 0 || headerLength > HEADER_BYTES - 7) throw new Error("Invalid video payload header.");
   const headerJson = decoder.decode(allBytes.slice(7, 7 + headerLength));
   const header = JSON.parse(headerJson) as Header;
   const payloadStart = HEADER_BYTES;
@@ -1761,27 +1774,48 @@ function packChunk(header: Header, payload: Uint8Array) {
 }
 
 function bytesToSymbols(bytes: Uint8Array) {
-  let value = 0n;
-  for (const byte of bytes) {
-    value = (value << 8n) | BigInt(byte);
-  }
   const symbols = new Array<number>(SYMBOL_COUNT).fill(0);
   const radix = BigInt(SYMBOL_RADIX);
-  for (let i = symbols.length - 1; i >= 0; i--) {
-    symbols[i] = Number(value % radix);
-    value /= radix;
+  const blockCount = Math.ceil(bytes.length / SYMBOL_BLOCK_BYTES);
+  for (let block = 0; block < blockCount; block++) {
+    let value = 0n;
+    const byteStart = block * SYMBOL_BLOCK_BYTES;
+    for (let offset = 0; offset < SYMBOL_BLOCK_BYTES; offset++) {
+      value = (value << 8n) | BigInt(bytes[byteStart + offset] ?? 0);
+    }
+    const symbolStart = block * SYMBOL_BLOCK_SIZE;
+    for (let offset = SYMBOL_BLOCK_SIZE - 1; offset >= 0; offset--) {
+      symbols[symbolStart + offset] = Number(value % radix);
+      value /= radix;
+    }
   }
-  if (value !== 0n) throw new Error("Payload does not fit in the symbol grid.");
   return symbols;
 }
 
 function bitsToBytes(symbols: number[]) {
+  const radix = BigInt(SYMBOL_RADIX);
+  const bytes = new Uint8Array(RAW_CHUNK_BYTES);
+  const blockCount = Math.floor(symbols.length / SYMBOL_BLOCK_SIZE);
+  for (let block = 0; block < blockCount; block++) {
+    let value = 0n;
+    const symbolStart = block * SYMBOL_BLOCK_SIZE;
+    for (let offset = 0; offset < SYMBOL_BLOCK_SIZE; offset++) {
+      value = value * radix + BigInt(symbols[symbolStart + offset] ?? 0);
+    }
+    const byteStart = block * SYMBOL_BLOCK_BYTES;
+    for (let offset = SYMBOL_BLOCK_BYTES - 1; offset >= 0; offset--) {
+      bytes[byteStart + offset] = Number(value & 255n);
+      value >>= 8n;
+    }
+  }
+  return bytes;
+}
+
+function legacyBitsToBytes(symbols: number[]) {
   let value = 0n;
   const radix = BigInt(SYMBOL_RADIX);
-  for (const symbol of symbols) {
-    value = value * radix + BigInt(symbol);
-  }
-  const bytes = new Uint8Array(RAW_CHUNK_BYTES);
+  for (const symbol of symbols) value = value * radix + BigInt(symbol);
+  const bytes = new Uint8Array(Math.floor((SYMBOL_COUNT * Math.log2(SYMBOL_RADIX)) / 8));
   for (let i = bytes.length - 1; i >= 0; i--) {
     bytes[i] = Number(value & 255n);
     value >>= 8n;

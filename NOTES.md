@@ -188,9 +188,10 @@ two segment encoders for multi-video files
 video-only payloads on every browser; the environment-dependent AAC path is bypassed
 realtime VBR fallback when the browser cannot encode constant-bitrate H.264
 compact parity headers store contiguous start/count/last-length metadata instead of redundant arrays
+independent 8-byte / 25-symbol radix blocks replace grid-sized BigInt conversion
 ```
 
-The accepted one-megabyte benchmark improved from 112 seconds on the original codec to roughly 47 seconds. Against the immediately preceding optimized codec, constant-bitrate realtime encoding improved the controlled benchmark from 53.0 seconds to 46.8 seconds. Both the realtime VBR candidate and the final CBR candidate recovered 143/143 chunks with exact SHA-256 matches after Instagram transcoding.
+The accepted one-megabyte benchmark improved from 112 seconds on the original codec to 6.15 seconds. The major breakthrough was replacing whole-grid `BigInt` radix conversion with fixed 8-byte/25-symbol blocks. The small density tradeoff increased a one-megabyte fixture from 143 to 145 chunks, but removed the dominant JavaScript preprocessing cost. The exact candidate recovered 145/145 chunks with a matching SHA-256 after Instagram transcoding. The decoder first tries the block format and falls back to the legacy whole-grid conversion, which was verified against a previously generated 143-chunk MP4.
 
 Instagram evidence:
 
@@ -199,10 +200,12 @@ Instagram evidence:
 realtime VBR / exact 1 MB recovery: https://www.instagram.com/reel/Das4RxOEYP9/
 realtime CBR / exact 1 MB recovery: https://www.instagram.com/reel/Das5kvgFqkq/
 compact parity header / exact 1 MB recovery: https://www.instagram.com/reel/Das90-XANXH/
+fixed-block symbol conversion / exact 1 MB recovery: https://www.instagram.com/reel/DatBXtwG9TR/
+fixed-block symbol conversion / exact 8 MB carousel recovery: https://www.instagram.com/p/DatDW5xj6HE/
 ```
 
 The compact parity-header follow-up encoded a one-megabyte random fixture in 39.2 seconds and survived Instagram with 143/143 chunks plus an exact SHA-256 match. Parity 32 was rejected in a same-machine control (44.5 seconds versus 39.2 seconds for parity 16), so the accepted recovery group remains 16+1.
 
-An eight-megabyte source encoded into three carousel videos in 3:33 with two-way segment concurrency. The local round trip recovered 1,142/1,142 chunks and matched SHA-256. The published Instagram carousel returned all three CDN parts with 517 + 517 + 108 CRC-valid data chunks.
+With fixed-block symbol conversion, an eight-megabyte source encoded into three carousel videos in 29.0 seconds. The local round trip recovered 1,154/1,154 chunks with an exact SHA-256 match. After publishing the exact files as an Instagram carousel, downloading all three CDN-transcoded children, and decoding them together, the reader recovered 517 + 517 + 120 chunks. The reconstructed 8,388,608-byte file matched the source SHA-256 exactly: `a5c7577392284211973f4d1bc1081e023b6e9f9d69c2a79a7d832c2cb1dbcfc3`.
 
 Rejected experiments included 3px cells, two repeats, 3 Mbps, predictive H.264 frames, three-way segment concurrency, four- and eight-color alphabets, and smaller 704px geometry. Each was rejected for Instagram data loss, local data loss, slower measured wall time, or no reliable gain.

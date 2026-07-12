@@ -1,5 +1,10 @@
 export {};
 
+const MAGIC = [70, 84, 73, 71];
+const VERSION = 1;
+const SYMBOL_BLOCK_BYTES = 8;
+const SYMBOL_BLOCK_SIZE = 25;
+
 type ChunkKind = "data" | "xor";
 
 type Header = {
@@ -79,8 +84,19 @@ function decodeImageData(profile: WorkerCodecProfile, imageData: Uint8ClampedArr
     }
   }
 
-  const allBytes = bitsToBytes(profile, symbols);
+  try {
+    return decodeChunkBytes(profile, bitsToBytes(profile, symbols));
+  } catch {
+    return decodeChunkBytes(profile, legacyBitsToBytes(profile, symbols));
+  }
+}
+
+function decodeChunkBytes(profile: WorkerCodecProfile, allBytes: Uint8Array): DecodeResult {
+  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || allBytes[4] !== VERSION) {
+    throw new Error("Unknown video payload format.");
+  }
   const headerLength = readUint16(allBytes, 5);
+  if (headerLength <= 0 || headerLength > profile.headerBytes - 7) throw new Error("Invalid video payload header.");
   const headerJson = decoder.decode(allBytes.slice(7, 7 + headerLength));
   const header = JSON.parse(headerJson) as Header;
   const payloadStart = profile.headerBytes;
@@ -118,12 +134,29 @@ function expandParityMembers(profile: WorkerCodecProfile, header: Header) {
 }
 
 function bitsToBytes(profile: WorkerCodecProfile, symbols: number[]) {
+  const radix = BigInt(profile.symbolRadix);
+  const bytes = new Uint8Array(profile.rawChunkBytes);
+  const blockCount = Math.floor(symbols.length / SYMBOL_BLOCK_SIZE);
+  for (let block = 0; block < blockCount; block++) {
+    let value = 0n;
+    const symbolStart = block * SYMBOL_BLOCK_SIZE;
+    for (let offset = 0; offset < SYMBOL_BLOCK_SIZE; offset++) {
+      value = value * radix + BigInt(symbols[symbolStart + offset] ?? 0);
+    }
+    const byteStart = block * SYMBOL_BLOCK_BYTES;
+    for (let offset = SYMBOL_BLOCK_BYTES - 1; offset >= 0; offset--) {
+      bytes[byteStart + offset] = Number(value & 255n);
+      value >>= 8n;
+    }
+  }
+  return bytes;
+}
+
+function legacyBitsToBytes(profile: WorkerCodecProfile, symbols: number[]) {
   let value = 0n;
   const radix = BigInt(profile.symbolRadix);
-  for (const symbol of symbols) {
-    value = value * radix + BigInt(symbol);
-  }
-  const bytes = new Uint8Array(profile.rawChunkBytes);
+  for (const symbol of symbols) value = value * radix + BigInt(symbol);
+  const bytes = new Uint8Array(Math.floor((profile.symbolCount * Math.log2(profile.symbolRadix)) / 8));
   for (let i = bytes.length - 1; i >= 0; i--) {
     bytes[i] = Number(value & 255n);
     value >>= 8n;

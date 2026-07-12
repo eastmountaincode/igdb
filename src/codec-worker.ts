@@ -2,6 +2,8 @@ export {};
 
 const MAGIC = [70, 84, 73, 71]; // FTIG
 const VERSION = 1;
+const SYMBOL_BLOCK_BYTES = 8;
+const SYMBOL_BLOCK_SIZE = 25;
 
 type ChunkKind = "data" | "xor";
 
@@ -102,17 +104,21 @@ function packChunk(profile: WorkerCodecProfile, header: Header, payload: Uint8Ar
 }
 
 function bytesToSymbols(profile: WorkerCodecProfile, bytes: Uint8Array) {
-  let value = 0n;
-  for (const byte of bytes) {
-    value = (value << 8n) | BigInt(byte);
-  }
   const symbols = new Array<number>(profile.symbolCount).fill(0);
   const radix = BigInt(profile.symbolRadix);
-  for (let i = symbols.length - 1; i >= 0; i--) {
-    symbols[i] = Number(value % radix);
-    value /= radix;
+  const blockCount = Math.ceil(bytes.length / SYMBOL_BLOCK_BYTES);
+  for (let block = 0; block < blockCount; block++) {
+    let value = 0n;
+    const byteStart = block * SYMBOL_BLOCK_BYTES;
+    for (let offset = 0; offset < SYMBOL_BLOCK_BYTES; offset++) {
+      value = (value << 8n) | BigInt(bytes[byteStart + offset] ?? 0);
+    }
+    const symbolStart = block * SYMBOL_BLOCK_SIZE;
+    for (let offset = SYMBOL_BLOCK_SIZE - 1; offset >= 0; offset--) {
+      symbols[symbolStart + offset] = Number(value % radix);
+      value /= radix;
+    }
   }
-  if (value !== 0n) throw new Error("Payload does not fit in the symbol grid.");
   return symbols;
 }
 
