@@ -20,6 +20,7 @@ Branches:
 
 - `experiment/instagram-auto-upload`: browser-automation research.
 - `feature/instagram-api-upload`: Meta Instagram API publishing integration.
+- `experiment/encode-performance`: iterative encoding-speed and payload-capacity research; preserve byte-perfect recovery and publishing behavior while benchmarking each codec change.
 
 The intended boundary is:
 
