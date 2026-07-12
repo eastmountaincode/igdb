@@ -400,35 +400,8 @@ pre {
 }
 
 .publish-card textarea {
-  min-height: 92px;
+  min-height: 64px;
   margin-top: 0;
-}
-
-.caption-preview {
-  display: grid;
-  gap: 6px;
-}
-
-.caption-preview pre {
-  min-height: 130px;
-  margin-top: 0;
-}
-
-.publish-confirmation {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 9px;
-  align-items: start;
-  border: 1px solid #000;
-  padding: 11px;
-  font-size: 0.9rem;
-  font-weight: 700;
-}
-
-.publish-confirmation input {
-  width: 18px;
-  height: 18px;
-  margin: 0;
 }
 
 .published-link {

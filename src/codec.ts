@@ -315,7 +315,14 @@ export async function encodeFileAsVideos(
   file: File,
   onProgress?: (progress: EncodeVideoProgress) => void
 ): Promise<EncodedVideo[]> {
-  return encodeFileAsHybridVideos(file, onProgress);
+  try {
+    return await encodeFileAsHybridVideos(file, onProgress);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("encoder configuration") || !message.includes("mp4a.40.2")) throw error;
+    onProgress?.({ phase: "Audio unavailable; encoding video only", completed: 0, total: 1 });
+    return encodeFileAsVideosWithRepeat(file, VIDEO_REPEAT_FRAMES, onProgress);
+  }
 }
 
 async function encodeFileAsHybridVideos(

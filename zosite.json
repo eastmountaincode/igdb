@@ -1,5 +1,15 @@
 {
   "name": "igdb-instagram-experiment",
   "local_port": 5177,
-  "entrypoint": "npm run dev -- -p 5177"
+  "entrypoint": "npm run dev -- -p 5177",
+  "publish": {
+    "label": "igdb-instagram",
+    "type": "http",
+    "entrypoint": "bash -c 'source /root/.zo_secrets 2>/dev/null || true; npm run build && npm run start -- -p 5178'",
+    "published_port": 5178,
+    "env": {
+      "NODE_ENV": "production",
+      "INSTAGRAM_MEDIA_BASE_URL": "https://igdb-instagram-eastmountain.zocomputer.io"
+    }
+  }
 }

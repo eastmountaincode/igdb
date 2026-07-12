@@ -19,7 +19,6 @@ import {
   type EncodeVideoProgress,
   type EncodedVideo
 } from "@/codec";
-import { buildInstagramCaption } from "@/instagram-caption";
 
 type ActiveTab = "read" | "write";
 
@@ -28,7 +27,6 @@ export function InstagramPixelDbApp() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [encodedVideos, setEncodedVideos] = useState<EncodedVideo[]>([]);
   const [decodedChunks, setDecodedChunks] = useState<DecodeResult[]>([]);
-  const [caption, setCaption] = useState("");
   const [decodeMessages, setDecodeMessages] = useState<string[]>([]);
   const [isEncodingVideo, setIsEncodingVideo] = useState(false);
   const [encodeProgress, setEncodeProgress] = useState<EncodeVideoProgress | null>(null);
@@ -37,7 +35,6 @@ export function InstagramPixelDbApp() {
   const [isFileDragActive, setIsFileDragActive] = useState(false);
   const [isVideoDragActive, setIsVideoDragActive] = useState(false);
   const [publishNote, setPublishNote] = useState("");
-  const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishMessage, setPublishMessage] = useState("");
   const [publishedUrl, setPublishedUrl] = useState("");
@@ -50,15 +47,6 @@ export function InstagramPixelDbApp() {
   const canAssemble = expectedChunks > 0 && recoveredChunks === expectedChunks;
   const recoveredFileName = decodedChunks.find((chunk) => chunk.kind === "data" && chunk.fileName)?.fileName;
   const decodeLog = buildDecodeSummary(decodedChunks, decodeMessages);
-  const publishingCaption = selectedFile
-    ? buildInstagramCaption({
-        name: selectedFile.name,
-        type: selectedFile.type || "application/octet-stream",
-        size: selectedFile.size,
-        note: publishNote
-      })
-    : "Select and encode a file to prepare its Instagram caption.";
-
   function resetDecode() {
     setDecodedChunks([]);
     setDecodeMessages([]);
@@ -71,7 +59,6 @@ export function InstagramPixelDbApp() {
 
   function selectFile(file: File | null) {
     setSelectedFile(file);
-    setPublishConfirmed(false);
     setPublishMessage("");
     setPublishedUrl("");
   }
@@ -105,7 +92,6 @@ export function InstagramPixelDbApp() {
     try {
       const videos = await encodeFileAsVideos(file, setEncodeProgress);
       setEncodedVideos(videos);
-      setCaption(videos.map((video) => video.caption).join("\n\n---\n\n"));
       setEncodeProgress({ phase: videos.length > 1 ? "MP4 set ready" : "MP4 ready", completed: videos.length, total: videos.length });
     } catch (error) {
       setDecodeMessages([`Video encode failed: ${error instanceof Error ? error.message : String(error)}`]);
@@ -232,7 +218,7 @@ export function InstagramPixelDbApp() {
   }
 
   async function handlePublishToInstagram() {
-    if (!selectedFile || !encodedVideos.length || !publishConfirmed || isPublishing) return;
+    if (!selectedFile || !encodedVideos.length || isPublishing) return;
     setIsPublishing(true);
     setPublishMessage("Uploading to @normal_shopkeep...");
     setPublishedUrl("");
@@ -256,7 +242,6 @@ export function InstagramPixelDbApp() {
       if (!response.ok || !result.permalink) throw new Error(result.error || "Instagram did not return a post URL.");
       setPublishedUrl(result.permalink);
       setPublishMessage(`Published ${result.parts ?? encodedVideos.length} ${pluralize("video", result.parts ?? encodedVideos.length)}.`);
-      setPublishConfirmed(false);
     } catch (error) {
       setPublishMessage(error instanceof Error ? error.message : "Instagram publishing failed.");
     } finally {
@@ -333,10 +318,6 @@ export function InstagramPixelDbApp() {
       ) : (
         <section className="tab-panel write-layout">
           <article className="panel write-source">
-            <div className="panel-title">
-              <h2>Write a file</h2>
-            </div>
-
             <label
               className={`dropzone${isFileDragActive ? " drag-active" : ""}`}
               htmlFor="file-input"
@@ -450,12 +431,9 @@ export function InstagramPixelDbApp() {
               <div className="empty-output">No MP4 generated yet.</div>
             )}
 
-            <textarea readOnly value={caption} placeholder="Video caption manifest will appear here." />
-
             <section className="publish-card" aria-labelledby="instagram-publish-title">
               <div className="panel-title">
                 <h2 id="instagram-publish-title">Publish to @normal_shopkeep</h2>
-                <p>Generated videos are posted in part order as one Reel or carousel.</p>
               </div>
 
               <label className="field-label" htmlFor="instagram-note">
@@ -464,33 +442,15 @@ export function InstagramPixelDbApp() {
                   id="instagram-note"
                   value={publishNote}
                   maxLength={1000}
-                  onChange={(event) => {
-                    setPublishNote(event.target.value);
-                    setPublishConfirmed(false);
-                  }}
+                  onChange={(event) => setPublishNote(event.target.value)}
                   placeholder="Add context for this file."
                 />
-              </label>
-
-              <div className="caption-preview">
-                <strong>Caption preview</strong>
-                <pre>{publishingCaption}</pre>
-              </div>
-
-              <label className="publish-confirmation">
-                <input
-                  type="checkbox"
-                  checked={publishConfirmed}
-                  disabled={!encodedVideos.length || isPublishing}
-                  onChange={(event) => setPublishConfirmed(event.target.checked)}
-                />
-                Publish these {encodedVideos.length || 0} {pluralize("video", encodedVideos.length || 0)} publicly to @normal_shopkeep.
               </label>
 
               <div className="button-row">
                 <button
                   type="button"
-                  disabled={!selectedFile || !encodedVideos.length || !publishConfirmed || isPublishing}
+                  disabled={!selectedFile || !encodedVideos.length || isPublishing}
                   onClick={handlePublishToInstagram}
                 >
                   {isPublishing ? "Publishing..." : "Publish to Instagram"}

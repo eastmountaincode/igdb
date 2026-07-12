@@ -7,8 +7,6 @@ export type InstagramFileMetadata = {
 
 export function buildInstagramCaption(metadata: InstagramFileMetadata) {
   const lines = [
-    "IGDB",
-    "",
     `File name: ${metadata.name}`,
     `File type: ${metadata.type || "application/octet-stream"}`,
     `File size: ${formatCaptionBytes(metadata.size)}`

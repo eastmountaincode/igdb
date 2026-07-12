@@ -12,6 +12,7 @@ IGDB encodes a file into one or more Instagram-compatible H.264 MP4 videos and c
 - `src/audio-codec.ts`: AAC/DTMF side channel.
 - Generated MP4s are `Blob` objects held only in browser memory until downloaded.
 - `zosite.json`: Zo development configuration on port 5177.
+- Public Zo Site: `https://igdb-instagram-eastmountain.zocomputer.io` (service port 5178).
 
 ## Instagram upload experiment
 
@@ -30,6 +31,8 @@ The intended boundary is:
 Do not put Instagram credentials or browser session data in Git. Require a final user action before enqueueing a public post, show the destination account, and make retries idempotent so a failed job cannot create duplicate posts.
 
 The API branch publishes only to `@normal_shopkeep`. It reads `INSTAGRAM_ACCESS_TOKEN_NORMAL_SHOPKEEP` on the server and requires a public HTTPS origin (or `INSTAGRAM_MEDIA_BASE_URL`) so Meta can fetch staged MP4s. The UI builds captions from original file name, MIME type, size, and an optional note.
+
+The published service sources `/root/.zo_secrets` at startup so the Instagram token remains outside the repository. Keep `INSTAGRAM_MEDIA_BASE_URL` pointed at the public Zo Site URL.
 
 ## Commands
 

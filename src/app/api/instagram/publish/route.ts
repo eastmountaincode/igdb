@@ -41,7 +41,10 @@ export async function POST(request: Request) {
     }
 
     const configuredBaseUrl = process.env.INSTAGRAM_MEDIA_BASE_URL?.replace(/\/$/, "");
-    const mediaBaseUrl = configuredBaseUrl || new URL(request.url).origin;
+    const forwardedHost = request.headers.get("x-forwarded-host") || request.headers.get("host");
+    const forwardedProto = request.headers.get("x-forwarded-proto");
+    const forwardedOrigin = forwardedHost && forwardedProto ? `${forwardedProto}://${forwardedHost}` : "";
+    const mediaBaseUrl = configuredBaseUrl || forwardedOrigin || new URL(request.url).origin;
     if (!mediaBaseUrl.startsWith("https://")) {
       return Response.json({ error: "Instagram publishing requires a public HTTPS site URL." }, { status: 503 });
     }
