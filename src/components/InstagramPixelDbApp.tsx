@@ -19,6 +19,7 @@ import {
   type EncodeVideoProgress,
   type EncodedVideo
 } from "@/codec";
+import { buildInstagramCaption } from "@/instagram-caption";
 
 type ActiveTab = "read" | "write";
 
@@ -35,6 +36,11 @@ export function InstagramPixelDbApp() {
   const [isDecodingVideo, setIsDecodingVideo] = useState(false);
   const [isFileDragActive, setIsFileDragActive] = useState(false);
   const [isVideoDragActive, setIsVideoDragActive] = useState(false);
+  const [publishNote, setPublishNote] = useState("");
+  const [publishConfirmed, setPublishConfirmed] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishMessage, setPublishMessage] = useState("");
+  const [publishedUrl, setPublishedUrl] = useState("");
   const cap = useMemo(() => capacitySummary(), []);
   const selectedPlan = selectedFile ? estimateVideoPlan(selectedFile.size) : null;
   const selectedSegmentCount = selectedPlan?.segments ?? 0;
@@ -44,6 +50,14 @@ export function InstagramPixelDbApp() {
   const canAssemble = expectedChunks > 0 && recoveredChunks === expectedChunks;
   const recoveredFileName = decodedChunks.find((chunk) => chunk.kind === "data" && chunk.fileName)?.fileName;
   const decodeLog = buildDecodeSummary(decodedChunks, decodeMessages);
+  const publishingCaption = selectedFile
+    ? buildInstagramCaption({
+        name: selectedFile.name,
+        type: selectedFile.type || "application/octet-stream",
+        size: selectedFile.size,
+        note: publishNote
+      })
+    : "Select and encode a file to prepare its Instagram caption.";
 
   function resetDecode() {
     setDecodedChunks([]);
@@ -57,6 +71,9 @@ export function InstagramPixelDbApp() {
 
   function selectFile(file: File | null) {
     setSelectedFile(file);
+    setPublishConfirmed(false);
+    setPublishMessage("");
+    setPublishedUrl("");
   }
 
   function handleFileDrag(event: DragEvent<HTMLLabelElement>) {
@@ -212,6 +229,39 @@ export function InstagramPixelDbApp() {
       ...current,
       `Reassembled ${assembled.fileName}. SHA-256 ${assembled.hashOk ? "OK" : "MISMATCH"}.`
     ]);
+  }
+
+  async function handlePublishToInstagram() {
+    if (!selectedFile || !encodedVideos.length || !publishConfirmed || isPublishing) return;
+    setIsPublishing(true);
+    setPublishMessage("Uploading to @normal_shopkeep...");
+    setPublishedUrl("");
+    try {
+      const form = new FormData();
+      for (const video of [...encodedVideos].sort((left, right) => left.segmentIndex - right.segmentIndex)) {
+        form.append(
+          "videos",
+          video.blob,
+          generatedVideoFileName(selectedFile.name, video.segmentIndex, video.totalSegments)
+        );
+      }
+      form.set("originalName", selectedFile.name);
+      form.set("originalType", selectedFile.type || "application/octet-stream");
+      form.set("originalSize", String(selectedFile.size));
+      form.set("note", publishNote.trim());
+      form.set("confirmation", "publish-to-normal-shopkeep");
+
+      const response = await fetch("/api/instagram/publish", { method: "POST", body: form });
+      const result = (await response.json()) as { error?: string; permalink?: string; parts?: number };
+      if (!response.ok || !result.permalink) throw new Error(result.error || "Instagram did not return a post URL.");
+      setPublishedUrl(result.permalink);
+      setPublishMessage(`Published ${result.parts ?? encodedVideos.length} ${pluralize("video", result.parts ?? encodedVideos.length)}.`);
+      setPublishConfirmed(false);
+    } catch (error) {
+      setPublishMessage(error instanceof Error ? error.message : "Instagram publishing failed.");
+    } finally {
+      setIsPublishing(false);
+    }
   }
 
   return (
@@ -401,6 +451,55 @@ export function InstagramPixelDbApp() {
             )}
 
             <textarea readOnly value={caption} placeholder="Video caption manifest will appear here." />
+
+            <section className="publish-card" aria-labelledby="instagram-publish-title">
+              <div className="panel-title">
+                <h2 id="instagram-publish-title">Publish to @normal_shopkeep</h2>
+                <p>Generated videos are posted in part order as one Reel or carousel.</p>
+              </div>
+
+              <label className="field-label" htmlFor="instagram-note">
+                Optional note
+                <textarea
+                  id="instagram-note"
+                  value={publishNote}
+                  maxLength={1000}
+                  onChange={(event) => {
+                    setPublishNote(event.target.value);
+                    setPublishConfirmed(false);
+                  }}
+                  placeholder="Add context for this file."
+                />
+              </label>
+
+              <div className="caption-preview">
+                <strong>Caption preview</strong>
+                <pre>{publishingCaption}</pre>
+              </div>
+
+              <label className="publish-confirmation">
+                <input
+                  type="checkbox"
+                  checked={publishConfirmed}
+                  disabled={!encodedVideos.length || isPublishing}
+                  onChange={(event) => setPublishConfirmed(event.target.checked)}
+                />
+                Publish these {encodedVideos.length || 0} {pluralize("video", encodedVideos.length || 0)} publicly to @normal_shopkeep.
+              </label>
+
+              <div className="button-row">
+                <button
+                  type="button"
+                  disabled={!selectedFile || !encodedVideos.length || !publishConfirmed || isPublishing}
+                  onClick={handlePublishToInstagram}
+                >
+                  {isPublishing ? "Publishing..." : "Publish to Instagram"}
+                </button>
+              </div>
+
+              {publishMessage ? <p className="publish-status" role="status">{publishMessage}</p> : null}
+              {publishedUrl ? <a className="published-link" href={publishedUrl} target="_blank" rel="noreferrer">Open Instagram post</a> : null}
+            </section>
           </article>
         </section>
       )}

@@ -152,6 +152,24 @@ add explicit video-frame sync markers and chunk-majority voting
 try less random-looking symbol layouts to reduce video encoder stress
 ```
 
+## Automatic Instagram Upload Experiment
+
+The `experiment/instagram-auto-upload` branch is the Zo-hosted experiment for posting generated videos through a persistent browser session.
+
+The generated videos currently exist only as in-memory browser `Blob` objects. Automatic posting therefore requires a server handoff rather than calling the Instagram browser directly from this page:
+
+```text
+generated MP4 blob(s) + user caption
+  -> staged upload on Zo
+  -> durable queued job
+  -> one-at-a-time browser worker using a dedicated Instagram profile
+  -> post status and cleanup
+```
+
+For multiple generated videos, preserve `segmentIndex` ordering and submit them as one carousel when Instagram permits the complete set. Jobs need explicit destination-account confirmation, idempotency protection, retry-safe status transitions, and retained error evidence without storing Instagram credentials in the repository.
+
+The Meta API path was proven against `@normal_shopkeep` on 2026-07-11: a generated MP4 container reached `FINISHED` and was published as a Reel. `feature/instagram-api-upload` integrates that flow into the generated-video UI. A single MP4 is published as a Reel; 2–8 ordered MP4s are published as one carousel. The caption format is file name, file type, file size, then an optional user note.
+
 Relevant research directions:
 
 - High-capacity color QR/barcode decoding: learned or calibrated color classification, cross-module color interference, geometric correction.

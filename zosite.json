@@ -1,0 +1,5 @@
+{
+  "name": "igdb-instagram-experiment",
+  "local_port": 5177,
+  "entrypoint": "npm run dev -- -p 5177"
+}
