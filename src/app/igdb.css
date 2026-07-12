@@ -71,6 +71,11 @@ textarea {
   resize: vertical;
 }
 
+.caption-preview {
+  min-height: 7rem;
+  overflow-y: hidden;
+}
+
 fieldset {
   min-inline-size: 0;
   margin: 0;

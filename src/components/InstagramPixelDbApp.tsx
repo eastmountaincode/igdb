@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ChangeEvent, type DragEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import {
   decodeVideoFile,
   downloadBlob,
@@ -33,6 +33,7 @@ export function InstagramPixelDbApp() {
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishMessage, setPublishMessage] = useState("");
   const [publishedUrl, setPublishedUrl] = useState("");
+  const captionPreviewRef = useRef<HTMLTextAreaElement>(null);
   const fileTooLarge = Boolean(selectedFile && selectedFile.size > MAX_SOURCE_FILE_BYTES);
   const captionPreview = selectedFile
     ? buildInstagramCaption({
@@ -42,6 +43,13 @@ export function InstagramPixelDbApp() {
         note: publishNote
       })
     : "";
+
+  useLayoutEffect(() => {
+    const textarea = captionPreviewRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight + 2}px`;
+  }, [captionPreview]);
 
   const recoveredChunks = decodedChunks.filter((chunk) => chunk.ok && chunk.kind === "data").length;
   const expectedChunks = decodedChunks[0]?.totalChunks ?? 0;
@@ -337,7 +345,14 @@ export function InstagramPixelDbApp() {
 
               <label className="field-label" htmlFor="instagram-caption-preview">
                 caption
-                <textarea id="instagram-caption-preview" readOnly value={captionPreview} placeholder="choose a file" />
+                <textarea
+                  ref={captionPreviewRef}
+                  id="instagram-caption-preview"
+                  className="caption-preview"
+                  readOnly
+                  value={captionPreview}
+                  placeholder="choose a file"
+                />
               </label>
 
               <div className="button-row">
