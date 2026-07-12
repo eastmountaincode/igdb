@@ -108,16 +108,46 @@ table {
   padding: 1rem 0 2rem;
 }
 
+.site-header {
+  display: flex;
+  align-items: flex-end;
+  min-height: 2.25rem;
+  border-bottom: 1px solid #000;
+}
+
+.site-title {
+  margin-right: 1.5rem;
+  padding-bottom: 0.3rem;
+}
+
 .tabbar {
   display: flex;
-  gap: 0.35rem;
-  margin: 0.75rem 0;
-  padding-bottom: 0.4rem;
-  border-bottom: 1px dotted #000;
+  align-items: flex-end;
+  gap: 0.1rem;
+  margin-bottom: -1px;
+}
+
+.tabbar button {
+  min-height: auto;
+  border-color: transparent;
+  border-bottom-color: #000;
+  padding: 0.2rem 0.55rem 0.3rem;
+  background: #fff;
 }
 
 .tabbar button.active {
-  background: #ddd;
+  border-color: #000;
+  border-bottom-color: #fff;
+  background: #fff;
+  font-weight: bold;
+}
+
+.tabbar button:active {
+  background: #fff;
+}
+
+.tab-panel {
+  margin-top: 0.85rem;
 }
 
 .read-layout,

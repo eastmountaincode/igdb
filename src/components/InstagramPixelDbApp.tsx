@@ -205,15 +205,30 @@ export function InstagramPixelDbApp() {
   }
 
   return (
-    <main className="shell">
-      <nav className="tabbar" aria-label="Mode">
-        <button type="button" className={activeTab === "write" ? "active" : ""} onClick={() => setActiveTab("write")}>
-          write
-        </button>
-        <button type="button" className={activeTab === "read" ? "active" : ""} onClick={() => setActiveTab("read")}>
-          read
-        </button>
-      </nav>
+    <div className="shell">
+      <header className="site-header">
+        <span className="site-title">IGDB</span>
+        <nav className="tabbar" aria-label="pages">
+          <button
+            type="button"
+            className={activeTab === "write" ? "active" : ""}
+            aria-current={activeTab === "write" ? "page" : undefined}
+            onClick={() => setActiveTab("write")}
+          >
+            Write
+          </button>
+          <button
+            type="button"
+            className={activeTab === "read" ? "active" : ""}
+            aria-current={activeTab === "read" ? "page" : undefined}
+            onClick={() => setActiveTab("read")}
+          >
+            Read
+          </button>
+        </nav>
+      </header>
+
+      <main>
 
       {activeTab === "read" ? (
         <section className="tab-panel read-layout">
@@ -327,7 +342,8 @@ export function InstagramPixelDbApp() {
           </fieldset>
         </section>
       )}
-    </main>
+      </main>
+    </div>
   );
 }
 
