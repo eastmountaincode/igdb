@@ -251,30 +251,31 @@ export function InstagramPixelDbApp() {
 
   return (
     <main className="shell">
-      <div className="spec-strip" aria-label="Codec settings">
-        <span><b>{cap.colors}-color radix</b></span>
-        <span>{formatBytes(cap.payloadBytesPerImage)}/frame</span>
-        <span>{formatBytes(cap.videoBytesPerSecond)}/s</span>
-        <span>{VIDEO_TARGET_SECONDS}s cap: {formatBytes(cap.videoTargetBytes)}</span>
-        <span>audio max {formatBytes(cap.videoMaxAudioPayloadBytes)}</span>
-      </div>
+      <table className="codec-table" aria-label="codec settings">
+        <tbody>
+          <tr>
+            <td><b>{cap.colors}-color radix</b></td>
+            <td>{formatBytes(cap.payloadBytesPerImage)}/frame</td>
+            <td>{formatBytes(cap.videoBytesPerSecond)}/s</td>
+            <td>{VIDEO_TARGET_SECONDS}s cap: {formatBytes(cap.videoTargetBytes)}</td>
+            <td>audio max {formatBytes(cap.videoMaxAudioPayloadBytes)}</td>
+          </tr>
+        </tbody>
+      </table>
 
       <nav className="tabbar" aria-label="Mode">
         <button type="button" className={activeTab === "write" ? "active" : ""} onClick={() => setActiveTab("write")}>
-          Write
+          write
         </button>
         <button type="button" className={activeTab === "read" ? "active" : ""} onClick={() => setActiveTab("read")}>
-          Read
+          read
         </button>
       </nav>
 
       {activeTab === "read" ? (
         <section className="tab-panel read-layout">
-          <article className="panel read-source">
-            <div className="panel-title">
-              <h2>Read video</h2>
-            </div>
-
+          <fieldset className="panel read-source">
+            <legend>read video</legend>
             <label
               className={`dropzone video-dropzone${isVideoDragActive ? " drag-active" : ""}`}
               htmlFor="video-decode-input"
@@ -284,40 +285,38 @@ export function InstagramPixelDbApp() {
               onDrop={handleVideoDrop}
             >
               <input id="video-decode-input" type="file" accept="video/*,.mp4" multiple onChange={handleDecodeVideoSelection} />
-              <span>Choose MP4</span>
-              <strong>{expectedChunks ? `${recoveredChunks} / ${expectedChunks} chunks recovered` : "No video decoded"}</strong>
+              <span>choose MP4</span>
+              <strong>{expectedChunks ? `${recoveredChunks} / ${expectedChunks} chunks recovered` : "no video selected"}</strong>
             </label>
-          </article>
+          </fieldset>
 
-          <article className="panel">
-            <div className="panel-title">
-              <h2>Recovered file</h2>
-            </div>
-
+          <fieldset className="panel">
+            <legend>recovered file</legend>
             <dl className="media-summary">
               <div>
-                <dt>Chunks</dt>
-                <dd>{expectedChunks ? `${recoveredChunks}/${expectedChunks}` : "None"}</dd>
+                <dt>chunks</dt>
+                <dd>{expectedChunks ? `${recoveredChunks}/${expectedChunks}` : "—"}</dd>
               </div>
               <div>
-                <dt>File</dt>
-                <dd>{recoveredFileName ?? "Not decoded"}</dd>
+                <dt>file</dt>
+                <dd>{recoveredFileName ?? "—"}</dd>
               </div>
             </dl>
 
             <div className="button-row">
               <button type="button" disabled={!canAssemble} onClick={handleAssemble}>
-                Download recovered file
+                download recovered file
               </button>
             </div>
 
             {decodeProgress ? <ProgressView progress={decodeProgress} active={isDecodingVideo} label="Decoding progress" /> : null}
-            <pre>{decodeLog || "No decoded chunks yet."}</pre>
-          </article>
+            {decodeLog ? <pre>{decodeLog}</pre> : null}
+          </fieldset>
         </section>
       ) : (
         <section className="tab-panel write-layout">
-          <article className="panel write-source">
+          <fieldset className="panel write-source">
+            <legend>write</legend>
             <label
               className={`dropzone${isFileDragActive ? " drag-active" : ""}`}
               htmlFor="file-input"
@@ -327,14 +326,14 @@ export function InstagramPixelDbApp() {
               onDrop={handleFileDrop}
             >
               <input id="file-input" type="file" onChange={handleFileSelection} />
-              <span>Choose file</span>
+              <span>choose file</span>
                 <strong>
                   {selectedFile
                     ? `${selectedFile.name} (${formatBytes(selectedFile.size)}) - ${selectedSegmentCount} ${pluralize(
                         "video",
                         selectedSegmentCount
                       )}, ${selectedPlan?.audioPackets ?? 0} audio ${pluralize("packet", selectedPlan?.audioPackets ?? 0)}`
-                    : "No file selected"}
+                    : "no file selected"}
                 </strong>
               </label>
 
@@ -344,7 +343,7 @@ export function InstagramPixelDbApp() {
                 onClick={() => selectedFile && generateVideoForFile(selectedFile)}
                 disabled={!selectedFile || isEncodingVideo}
               >
-                {isEncodingVideo ? "Encoding..." : "Generate MP4"}
+                {isEncodingVideo ? "encoding..." : "generate MP4"}
               </button>
             </div>
 
@@ -352,38 +351,35 @@ export function InstagramPixelDbApp() {
 
             <dl className="video-summary compact-summary">
               <div>
-                <dt>FPS</dt>
+                <dt>fps</dt>
                 <dd>{VIDEO_FPS} fps</dd>
               </div>
               <div>
-                <dt>Repeat</dt>
+                <dt>repeat</dt>
                 <dd>{VIDEO_REPEAT_FRAMES} frames</dd>
               </div>
               <div>
-                <dt>Parity</dt>
+                <dt>parity</dt>
                 <dd>{VIDEO_PARITY_GROUP_SIZE}+1 XOR</dd>
               </div>
               <div>
-                <dt>Audio</dt>
-                <dd>{selectedPlan ? `${formatBytes(selectedPlan.audioPayloadBytes)} (${selectedPlan.audioPackets} packets)` : "Select a file"}</dd>
+                <dt>audio</dt>
+                <dd>{selectedPlan ? `${formatBytes(selectedPlan.audioPayloadBytes)} (${selectedPlan.audioPackets} packets)` : "—"}</dd>
               </div>
               <div>
-                <dt>Bitrate</dt>
+                <dt>bitrate</dt>
                 <dd>{Math.round(VIDEO_BITRATE / 1_000_000)} Mbps</dd>
               </div>
             </dl>
-          </article>
+          </fieldset>
 
-          <article className="panel write-output">
-            <div className="panel-title">
-              <h2>Generated videos</h2>
-            </div>
-
+          <fieldset className="panel write-output">
+            <legend>generated videos</legend>
             {encodedVideos.length ? (
               <div className="video-list">
 	                <div className="button-row">
 	                  <button type="button" onClick={handleDecodeGeneratedVideo} disabled={isDecodingVideo}>
-	                    {encodedVideos.length > 1 ? "Verify all" : "Verify decode"}
+	                    {encodedVideos.length > 1 ? "verify all" : "verify decode"}
 	                  </button>
 	                  {encodedVideos.length > 1 ? (
 	                    <button
@@ -394,17 +390,17 @@ export function InstagramPixelDbApp() {
 	                        )
 	                      }
 	                    >
-	                      Download all MP4s
+	                      download all MP4s
 	                    </button>
 	                  ) : null}
 	                </div>
 	                {encodedVideos.map((video) => (
-	                  <div className="video-output" key={video.url}>
+	                  <figure className="video-output" key={video.url}>
 	                    <video src={video.url} controls muted playsInline />
-	                    <div className="video-output-footer">
+	                    <figcaption className="video-output-footer">
 	                      <div className="video-meta">
 	                        <strong>
-	                          Part {video.segmentIndex + 1} of {video.totalSegments}
+	                          part {video.segmentIndex + 1} of {video.totalSegments}
 	                        </strong>
 	                        <span>{formatBytes(video.payloadBytes)} payload</span>
 	                        <span>
@@ -421,29 +417,24 @@ export function InstagramPixelDbApp() {
 	                        type="button"
 	                        onClick={() => downloadBlob(video.blob, generatedVideoFileName(selectedFile?.name, video.segmentIndex, video.totalSegments))}
 	                      >
-	                        {encodedVideos.length > 1 ? `Download part ${video.segmentIndex + 1}` : "Download MP4"}
+	                        {encodedVideos.length > 1 ? `download part ${video.segmentIndex + 1}` : "download MP4"}
 	                      </button>
-	                    </div>
-	                  </div>
+	                    </figcaption>
+	                  </figure>
 	                ))}
               </div>
-            ) : (
-              <div className="empty-output">No MP4 generated yet.</div>
-            )}
+            ) : null}
 
-            <section className="publish-card" aria-labelledby="instagram-publish-title">
-              <div className="panel-title">
-                <h2 id="instagram-publish-title">Publish to @normal_shopkeep</h2>
-              </div>
-
+            <fieldset className="publish-card">
+              <legend>publish to @normal_shopkeep</legend>
               <label className="field-label" htmlFor="instagram-note">
-                Optional note
+                optional note
                 <textarea
                   id="instagram-note"
                   value={publishNote}
                   maxLength={1000}
                   onChange={(event) => setPublishNote(event.target.value)}
-                  placeholder="Add context for this file."
+                  placeholder="add context"
                 />
               </label>
 
@@ -453,14 +444,14 @@ export function InstagramPixelDbApp() {
                   disabled={!selectedFile || !encodedVideos.length || isPublishing}
                   onClick={handlePublishToInstagram}
                 >
-                  {isPublishing ? "Publishing..." : "Publish to Instagram"}
+                  {isPublishing ? "publishing..." : "publish to Instagram"}
                 </button>
               </div>
 
               {publishMessage ? <p className="publish-status" role="status">{publishMessage}</p> : null}
-              {publishedUrl ? <a className="published-link" href={publishedUrl} target="_blank" rel="noreferrer">Open Instagram post</a> : null}
-            </section>
-          </article>
+              {publishedUrl ? <a className="published-link" href={publishedUrl} target="_blank" rel="noreferrer">open Instagram post</a> : null}
+            </fieldset>
+          </fieldset>
         </section>
       )}
     </main>
