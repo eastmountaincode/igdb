@@ -185,7 +185,7 @@ Accepted codec settings on `experiment/encode-performance`:
 30 fps / 3 repeats / XOR parity 16+1
 6 Mbps H.264 / constant bitrate / realtime latency mode
 two segment encoders for multi-video files
-video-only payloads on every browser; the environment-dependent AAC path is bypassed
+browser-independent audio sidecars; Zo muxes robust four-tone DTMF as AAC before publishing
 realtime VBR fallback when the browser cannot encode constant-bitrate H.264
 compact parity headers store contiguous start/count/last-length metadata instead of redundant arrays
 independent 8-byte / 25-symbol radix blocks replace grid-sized BigInt conversion
@@ -207,6 +207,8 @@ fixed-block symbol conversion / exact 8 MB carousel recovery: https://www.instag
 The compact parity-header follow-up encoded a one-megabyte random fixture in 39.2 seconds and survived Instagram with 143/143 chunks plus an exact SHA-256 match. Parity 32 was rejected in a same-machine control (44.5 seconds versus 39.2 seconds for parity 16), so the accepted recovery group remains 16+1.
 
 With fixed-block symbol conversion, an eight-megabyte source encoded into three carousel videos in 29.0 seconds. The local round trip recovered 1,154/1,154 chunks with an exact SHA-256 match. After publishing the exact files as an Instagram carousel, downloading all three CDN-transcoded children, and decoding them together, the reader recovered 517 + 517 + 120 chunks. The reconstructed 8,388,608-byte file matched the source SHA-256 exactly: `a5c7577392284211973f4d1bc1081e023b6e9f9d69c2a79a7d832c2cb1dbcfc3`.
+
+The audio-return experiment moved AAC encoding to the Zo publisher so browsers without an AAC WebCodecs encoder keep the same fast write path. Each video carries up to five independently synchronized 16-byte packets. Bytes are represented by four robust DTMF tone pairs as base-4 symbols; the original 16-tone alphabet corrupted high-valued symbols even in a local AAC round trip. The accepted 1 MB candidate encoded in about six seconds, carried one 16-byte packet, recovered 146/146 chunks locally, and matched SHA-256. Instagram retained the soundtrack as AAC and its CDN-transcoded copy also recovered 146/146 chunks with the exact source SHA-256. Evidence: https://www.instagram.com/reel/DatSjA0E9yt/
 
 The public upload limit is 28 MiB. At 517 data chunks per video and 7,272 payload bytes per chunk, eight Instagram carousel videos carry 30,076,992 bytes; 28 MiB fits, while 29 MiB requires a ninth video. The interface describes the measured one-megabyte write speed as about 1 MB per 6.15 seconds.
 

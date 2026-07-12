@@ -21,12 +21,21 @@ export async function POST(request: Request) {
     }
 
     const videos = form.getAll("videos").filter((value): value is File => value instanceof File);
+    const audioPayloads = form.getAll("audioPayloads").filter((value): value is File => value instanceof File);
     if (!videos.length || videos.length > 8) {
       return Response.json({ error: "Upload between 1 and 8 MP4 videos." }, { status: 400 });
     }
     for (const video of videos) {
       if (video.size <= 0 || video.size > MAX_VIDEO_BYTES || (video.type && video.type !== "video/mp4")) {
         return Response.json({ error: "Every upload must be an MP4 smaller than 100 MB." }, { status: 400 });
+      }
+    }
+    if (audioPayloads.length && audioPayloads.length !== videos.length) {
+      return Response.json({ error: "Every video must include one audio payload." }, { status: 400 });
+    }
+    for (const audioPayload of audioPayloads) {
+      if (audioPayload.size <= 0 || audioPayload.size > 80) {
+        return Response.json({ error: "Invalid audio payload." }, { status: 400 });
       }
     }
 
@@ -55,6 +64,7 @@ export async function POST(request: Request) {
 
     const result = await publishInstagramVideos({
       videos,
+      audioPayloads,
       metadata: { name: originalName, type: originalType, size: originalSize, note },
       mediaBaseUrl
     });

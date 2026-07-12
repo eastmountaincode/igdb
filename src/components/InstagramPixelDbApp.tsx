@@ -194,6 +194,9 @@ export function InstagramPixelDbApp() {
           video.blob,
           generatedVideoFileName(selectedFile.name, video.segmentIndex, video.totalSegments)
         );
+        if (video.audioPayload) {
+          form.append("audioPayloads", video.audioPayload, `part-${video.segmentIndex + 1}.bin`);
+        }
       }
       form.set("originalName", selectedFile.name);
       form.set("originalType", selectedFile.type || "application/octet-stream");

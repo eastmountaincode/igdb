@@ -1,12 +1,16 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { buildInstagramCaption, type InstagramFileMetadata } from "@/instagram-caption";
+import { AUDIO_PROBE_SAMPLE_RATE, synthesizeDtmfProbePackets } from "@/audio-codec";
 
 const API_VERSION = "v24.0";
 const INSTAGRAM_ACCOUNT_ID = "28189490653969128";
 const INSTAGRAM_USERNAME = "normal_shopkeep";
 const JOB_ROOT = join(process.cwd(), ".instagram-uploads");
+const execFileAsync = promisify(execFile);
 
 type StagedJob = {
   id: string;
@@ -26,13 +30,14 @@ type GraphResponse = {
 
 export async function publishInstagramVideos(input: {
   videos: File[];
+  audioPayloads?: File[];
   metadata: InstagramFileMetadata;
   mediaBaseUrl: string;
 }) {
   const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN_NORMAL_SHOPKEEP;
   if (!accessToken) throw new Error("Instagram publishing is not configured.");
 
-  const job = await stageJob(input.videos, input.metadata);
+  const job = await stageJob(input.videos, input.audioPayloads ?? [], input.metadata);
   try {
     const childIds: string[] = [];
     for (let index = 0; index < job.files.length; index += 1) {
@@ -87,7 +92,7 @@ export async function readStagedMedia(jobId: string, fileName: string, token: st
   return readFile(join(JOB_ROOT, safeJobId, safeFileName));
 }
 
-async function stageJob(videos: File[], metadata: InstagramFileMetadata): Promise<StagedJob> {
+async function stageJob(videos: File[], audioPayloads: File[], metadata: InstagramFileMetadata): Promise<StagedJob> {
   const id = randomUUID();
   const directory = join(JOB_ROOT, id);
   await mkdir(directory, { recursive: true });
@@ -95,7 +100,15 @@ async function stageJob(videos: File[], metadata: InstagramFileMetadata): Promis
 
   for (let index = 0; index < videos.length; index += 1) {
     const fileName = `part-${String(index + 1).padStart(2, "0")}.mp4`;
-    await writeFile(join(directory, fileName), Buffer.from(await videos[index].arrayBuffer()));
+    const inputPath = join(directory, `input-${String(index + 1).padStart(2, "0")}.mp4`);
+    await writeFile(inputPath, Buffer.from(await videos[index].arrayBuffer()));
+    if (audioPayloads[index]) {
+      await muxDtmfAudio(inputPath, join(directory, fileName), new Uint8Array(await audioPayloads[index].arrayBuffer()), directory, index);
+      await rm(inputPath, { force: true });
+    } else {
+      await writeFile(join(directory, fileName), Buffer.from(await videos[index].arrayBuffer()));
+      await rm(inputPath, { force: true });
+    }
     files.push(fileName);
   }
 
@@ -108,6 +121,54 @@ async function stageJob(videos: File[], metadata: InstagramFileMetadata): Promis
   };
   await writeFile(join(directory, "job.json"), JSON.stringify(job));
   return job;
+}
+
+export async function muxDtmfAudio(inputPath: string, outputPath: string, payload: Uint8Array, directory: string, index: number) {
+  const packets: Uint8Array[] = [];
+  for (let offset = 0; offset < payload.length; offset += 16) {
+    packets.push(payload.slice(offset, offset + 16));
+  }
+  const samples = synthesizeDtmfProbePackets(packets);
+  const wavPath = join(directory, `audio-${String(index + 1).padStart(2, "0")}.wav`);
+  await writeFile(wavPath, encodeMonoPcm16Wav(samples, AUDIO_PROBE_SAMPLE_RATE));
+  try {
+    await execFileAsync("ffmpeg", [
+      "-hide_banner", "-loglevel", "error", "-y",
+      "-i", inputPath,
+      "-i", wavPath,
+      "-map", "0:v:0",
+      "-map", "1:a:0",
+      "-c:v", "copy",
+      "-c:a", "aac",
+      "-b:a", "128k",
+      "-movflags", "+faststart",
+      outputPath
+    ]);
+  } finally {
+    await rm(wavPath, { force: true });
+  }
+}
+
+function encodeMonoPcm16Wav(samples: Float32Array, sampleRate: number) {
+  const dataBytes = samples.length * 2;
+  const buffer = Buffer.allocUnsafe(44 + dataBytes);
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(36 + dataBytes, 4);
+  buffer.write("WAVEfmt ", 8);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(dataBytes, 40);
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[index]));
+    buffer.writeInt16LE(Math.round(sample * (sample < 0 ? 32768 : 32767)), 44 + index * 2);
+  }
+  return buffer;
 }
 
 async function waitForContainer(containerId: string, accessToken: string) {

@@ -1,11 +1,9 @@
 import {
   AUDIO_PROBE_DURATION_SECONDS,
   AUDIO_PROBE_PAYLOAD_BYTES,
-  AUDIO_PROBE_SAMPLE_RATE,
   audioProbeByteCapacityForDuration,
   audioProbeDurationForByteLength,
-  decodeDtmfProbeBytePacketsFromFile,
-  synthesizeDtmfProbePackets
+  decodeDtmfProbeBytePacketsFromFile
 } from "./audio-codec";
 
 export const CANVAS_SIZE = 720;
@@ -81,6 +79,7 @@ export type FileManifest = {
 
 export type EncodedVideo = {
   blob: Blob;
+  audioPayload?: Blob;
   url: string;
   frameCount: number;
   chunkCount: number;
@@ -320,7 +319,7 @@ export async function encodeFileAsVideos(
   file: File,
   onProgress?: (progress: EncodeVideoProgress) => void
 ): Promise<EncodedVideo[]> {
-  return encodeFileAsVideosWithRepeat(file, VIDEO_REPEAT_FRAMES, onProgress);
+  return encodeFileAsHybridVideos(file, onProgress);
 }
 
 async function encodeFileAsHybridVideos(
@@ -654,6 +653,7 @@ async function encodeHybridVideoSegment({
   const lastAudioChunk = segment.audioChunks.at(-1);
   return {
     blob,
+    audioPayload: new Blob(audioPayloads, { type: "application/octet-stream" }),
     url: URL.createObjectURL(blob),
     frameCount: renderJobs.length * repeatFrames,
     chunkCount: renderJobs.length + segment.audioChunks.length,
@@ -1432,7 +1432,7 @@ async function recordChunkJobsAsMp4(
     throw new Error("No chunks to record.");
   }
 
-  const { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output } = await import("mediabunny");
+  const { BufferTarget, CanvasSource, Mp4OutputFormat, Output } = await import("mediabunny");
   const format = new Mp4OutputFormat({ fastStart: "in-memory" });
   const videoEncoder = await pickInstagramVideoEncoder(format);
   if (!videoEncoder) {
@@ -1457,18 +1457,12 @@ async function recordChunkJobsAsMp4(
   output.addVideoTrack(source, {
     frameRate: fps
   });
-  const audioSource = audioPayloads.length
-    ? new AudioBufferSource({
-        codec: "aac",
-        bitrate: 128_000
-      })
-    : null;
-  if (audioSource) output.addAudioTrack(audioSource);
-
   await output.start();
   const chunkDuration = repeatFrames / fps;
-  const audioSamples = audioPayloads.length ? synthesizeDtmfProbePackets(audioPayloads) : null;
-  const audioDurationSeconds = audioSamples ? audioSamples.length / AUDIO_PROBE_SAMPLE_RATE : 0;
+  const audioDurationSeconds = audioPayloads.reduce(
+    (sum, payload) => sum + audioProbeDurationForByteLength(payload.length),
+    0
+  );
   const visualFrames = jobs.length * repeatFrames;
   const visualDurationSeconds = visualFrames / fps;
   const totalAdds = jobs.length + (audioDurationSeconds > visualDurationSeconds ? 1 : 0);
@@ -1490,18 +1484,6 @@ async function recordChunkJobsAsMp4(
     onProgress?.({ phase: "Encoding MP4 chunks", completed: completedAdds, total: totalAdds });
   }
   source.close();
-  if (audioSource && audioSamples) {
-    const audioSampleCount = Math.ceil(currentTime * AUDIO_PROBE_SAMPLE_RATE);
-    const audioContext = new AudioContext({ sampleRate: AUDIO_PROBE_SAMPLE_RATE });
-    try {
-      const audioBuffer = audioContext.createBuffer(1, audioSampleCount, AUDIO_PROBE_SAMPLE_RATE);
-      audioBuffer.copyToChannel(audioSamples.slice(0, audioSampleCount), 0);
-      await audioSource.add(audioBuffer);
-      audioSource.close();
-    } finally {
-      await audioContext.close();
-    }
-  }
   onProgress?.({ phase: "Finalizing MP4", completed: totalAdds, total: totalAdds });
   await output.finalize();
 

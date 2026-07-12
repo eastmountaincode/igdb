@@ -4,11 +4,12 @@ export const AUDIO_PROBE_SYMBOL_REPEATS = 3;
 export const AUDIO_PROBE_LOW_TONES = [697, 770, 852, 941] as const;
 export const AUDIO_PROBE_HIGH_TONES = [1209, 1336, 1477, 1633] as const;
 export const AUDIO_PROBE_AMPLITUDE = 0.42;
-export const AUDIO_PROBE_DURATION_SECONDS = 30;
+export const AUDIO_PROBE_DURATION_SECONDS = 10.96;
 export const AUDIO_PROBE_PAYLOAD_BYTES = 16;
 
-const PREAMBLE_SYMBOLS = [0xa, 0x5, 0xa, 0x5, 0xf, 0x0, 0xf, 0x0, 0xc, 0x3, 0xc, 0x3, 0x9, 0x6, 0x9, 0x6];
-const BYTE_SYNC_SYMBOLS = [0xd, 0x2, 0xd, 0x2];
+const ROBUST_SYMBOLS = [0, 1, 4, 5] as const;
+const PREAMBLE_SYMBOLS = [0, 5, 1, 4, 5, 0, 4, 1, 0, 4, 1, 5, 4, 0, 5, 1];
+const BYTE_SYNC_SYMBOLS = [1, 4, 1, 4];
 const SYMBOL_RATE_SEARCH_FACTORS = [0.97, 0.98, 0.99, 1, 1.01, 1.02, 1.03];
 const TEXT_ENCODER = new TextEncoder();
 const TEXT_DECODER = new TextDecoder();
@@ -65,15 +66,13 @@ export function buildAudioProbePayloadFromBytes(bytes: Uint8Array) {
 }
 
 export function audioProbeDurationForByteLength(byteLength: number) {
-  const symbolCount = PREAMBLE_SYMBOLS.length + byteLength * (AUDIO_PROBE_SYMBOL_REPEATS * 2 + BYTE_SYNC_SYMBOLS.length) + 2;
+  const symbolCount = PREAMBLE_SYMBOLS.length + byteLength * (AUDIO_PROBE_SYMBOL_REPEATS * 4 + BYTE_SYNC_SYMBOLS.length) + 2;
   return symbolCount * AUDIO_PROBE_SYMBOL_SECONDS;
 }
 
 export function audioProbeByteCapacityForDuration(durationSeconds: number, maxBytes = AUDIO_PROBE_PAYLOAD_BYTES) {
-  const symbolBudget = Math.floor(durationSeconds / AUDIO_PROBE_SYMBOL_SECONDS);
-  const fixedSymbols = PREAMBLE_SYMBOLS.length + 2;
-  const symbolsPerByte = AUDIO_PROBE_SYMBOL_REPEATS * 2 + BYTE_SYNC_SYMBOLS.length;
-  return Math.max(0, Math.min(maxBytes, Math.floor((symbolBudget - fixedSymbols) / symbolsPerByte)));
+  const packetCount = Math.floor(durationSeconds / AUDIO_PROBE_DURATION_SECONDS);
+  return Math.max(0, Math.min(maxBytes, packetCount * AUDIO_PROBE_PAYLOAD_BYTES));
 }
 
 export function synthesizeDtmfProbe(payload: AudioProbePayload) {
@@ -174,7 +173,7 @@ export function decodeDtmfProbeBytes(samples: Float32Array, sampleRate: number, 
 export function decodeDtmfProbeSamples(samples: Float32Array, sampleRate: number, expectedPayload = buildAudioProbePayload()): AudioProbeDecodeResult {
   const alignment = findBestAlignment(samples, sampleRate, expectedPayload.bytes.length);
 
-  const byteBlockSymbols = AUDIO_PROBE_SYMBOL_REPEATS * 2 + BYTE_SYNC_SYMBOLS.length;
+  const byteBlockSymbols = AUDIO_PROBE_SYMBOL_REPEATS * 4 + BYTE_SYNC_SYMBOLS.length;
   const neededSymbols = PREAMBLE_SYMBOLS.length + expectedPayload.bytes.length * byteBlockSymbols;
   const decodedSymbols = demodulateDtmfSymbols(samples, sampleRate, alignment.offset, neededSymbols, alignment.samplesPerSymbol);
   const preambleMatches = PREAMBLE_SYMBOLS.reduce((count, symbol, index) => count + (decodedSymbols[index] === symbol ? 1 : 0), 0);
@@ -193,7 +192,7 @@ export function decodeDtmfProbeSamples(samples: Float32Array, sampleRate: number
 
 function findBestAlignment(samples: Float32Array, sampleRate: number, byteLength: number) {
   const preambleLength = PREAMBLE_SYMBOLS.length;
-  const byteBlockSymbols = AUDIO_PROBE_SYMBOL_REPEATS * 2 + BYTE_SYNC_SYMBOLS.length;
+  const byteBlockSymbols = AUDIO_PROBE_SYMBOL_REPEATS * 4 + BYTE_SYNC_SYMBOLS.length;
   const neededSymbols = preambleLength + byteLength * byteBlockSymbols;
   const alignmentProbeSymbols = Math.min(neededSymbols, preambleLength + 5 * byteBlockSymbols);
 
@@ -222,10 +221,11 @@ function findBestAlignment(samples: Float32Array, sampleRate: number, byteLength
 function buildFramedSymbols(payload: AudioProbePayload) {
   const symbols = [...PREAMBLE_SYMBOLS];
   for (let byteIndex = 0; byteIndex < payload.bytes.length; byteIndex++) {
-    const highNibble = (payload.bytes[byteIndex] >> 4) & 0xf;
-    const lowNibble = payload.bytes[byteIndex] & 0xf;
-    for (let repeat = 0; repeat < AUDIO_PROBE_SYMBOL_REPEATS; repeat++) symbols.push(highNibble);
-    for (let repeat = 0; repeat < AUDIO_PROBE_SYMBOL_REPEATS; repeat++) symbols.push(lowNibble);
+    const byte = payload.bytes[byteIndex];
+    for (const shift of [6, 4, 2, 0]) {
+      const symbol = ROBUST_SYMBOLS[(byte >> shift) & 0x3];
+      for (let repeat = 0; repeat < AUDIO_PROBE_SYMBOL_REPEATS; repeat++) symbols.push(symbol);
+    }
     symbols.push(...BYTE_SYNC_SYMBOLS);
   }
   return symbols;
@@ -234,7 +234,7 @@ function buildFramedSymbols(payload: AudioProbePayload) {
 function decodeByteFramedPayload(samples: Float32Array, sampleRate: number, preambleOffset: number, samplesPerSymbol: number, byteCount: number, byteBlockShift: number) {
   const nibbles: number[] = [];
   let totalScore = 0;
-  const byteBlockSymbols = AUDIO_PROBE_SYMBOL_REPEATS * 2 + BYTE_SYNC_SYMBOLS.length;
+  const byteBlockSymbols = AUDIO_PROBE_SYMBOL_REPEATS * 4 + BYTE_SYNC_SYMBOLS.length;
   const payloadOffset = preambleOffset + PREAMBLE_SYMBOLS.length * samplesPerSymbol;
   const searchRadius = Math.floor(samplesPerSymbol * 0.75);
   const searchStep = Math.max(1, Math.floor(samplesPerSymbol / 8));
@@ -257,10 +257,13 @@ function decodeByteFramedPayload(samples: Float32Array, sampleRate: number, prea
 
     const block = bestBlockSymbols ?? new Array<number>(byteBlockSymbols).fill(0);
     totalScore += bestBlockScore;
-    nibbles.push(
-      majorityVoteSymbol(block.slice(0, AUDIO_PROBE_SYMBOL_REPEATS)),
-      majorityVoteSymbol(block.slice(AUDIO_PROBE_SYMBOL_REPEATS, AUDIO_PROBE_SYMBOL_REPEATS * 2))
+    const digits = [0, 1, 2, 3].map((digitIndex) =>
+      robustDigit(majorityVoteSymbol(block.slice(
+        digitIndex * AUDIO_PROBE_SYMBOL_REPEATS,
+        (digitIndex + 1) * AUDIO_PROBE_SYMBOL_REPEATS
+      )))
     );
+    nibbles.push(digits[0] * 4 + digits[1], digits[2] * 4 + digits[3]);
   }
 
   return { nibbles, score: totalScore };
@@ -337,6 +340,11 @@ function majorityVoteSymbol(symbols: number[]) {
   return bestSymbol;
 }
 
+function robustDigit(symbol: number) {
+  const digit = ROBUST_SYMBOLS.indexOf(symbol as (typeof ROBUST_SYMBOLS)[number]);
+  return digit < 0 ? 0 : digit;
+}
+
 function goertzelEnergy(samples: Float32Array, start: number, length: number, sampleRate: number, frequency: number) {
   const omega = (2 * Math.PI * frequency) / sampleRate;
   const coeff = 2 * Math.cos(omega);
@@ -370,7 +378,7 @@ function preambleScore(symbols: number[]) {
 
 function byteSyncScore(symbols: number[]) {
   let score = 0;
-  const syncStart = AUDIO_PROBE_SYMBOL_REPEATS * 2;
+  const syncStart = AUDIO_PROBE_SYMBOL_REPEATS * 4;
   for (let i = 0; i < BYTE_SYNC_SYMBOLS.length; i++) {
     score += symbols[syncStart + i] === BYTE_SYNC_SYMBOLS[i] ? 2 : -1;
   }
@@ -379,10 +387,10 @@ function byteSyncScore(symbols: number[]) {
 
 function alignmentScore(symbols: number[]) {
   let score = preambleScore(symbols);
-  const byteBlockSymbols = AUDIO_PROBE_SYMBOL_REPEATS * 2 + BYTE_SYNC_SYMBOLS.length;
+  const byteBlockSymbols = AUDIO_PROBE_SYMBOL_REPEATS * 4 + BYTE_SYNC_SYMBOLS.length;
   const byteCount = Math.floor((symbols.length - PREAMBLE_SYMBOLS.length) / byteBlockSymbols);
   for (let byteIndex = 0; byteIndex < byteCount; byteIndex++) {
-    const syncStart = PREAMBLE_SYMBOLS.length + byteIndex * byteBlockSymbols + AUDIO_PROBE_SYMBOL_REPEATS * 2;
+    const syncStart = PREAMBLE_SYMBOLS.length + byteIndex * byteBlockSymbols + AUDIO_PROBE_SYMBOL_REPEATS * 4;
     for (let i = 0; i < BYTE_SYNC_SYMBOLS.length; i++) {
       score += symbols[syncStart + i] === BYTE_SYNC_SYMBOLS[i] ? 2 : -1;
     }
