@@ -14,7 +14,7 @@ export function buildInstagramCaption(metadata: InstagramFileMetadata) {
 
   const note = metadata.note?.trim();
   if (note) lines.push("", `Note: ${note}`);
-  return lines.join("\n");
+  return `\n${lines.join("\n")}`;
 }
 
 export function formatCaptionBytes(bytes: number) {
