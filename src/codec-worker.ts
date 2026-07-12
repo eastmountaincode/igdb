@@ -140,7 +140,7 @@ function drawCalibration(profile: WorkerCodecProfile, ctx: OffscreenCanvasRender
   for (let i = 0; i < profile.palette.length; i++) {
     const [r, g, b] = profile.palette[i];
     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-    ctx.fillRect(242 + i * 48, 21, 36, 36);
+    ctx.fillRect(242 + i * 48, 15, 24, 24);
   }
 }
 

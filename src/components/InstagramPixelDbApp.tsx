@@ -137,12 +137,21 @@ export function InstagramPixelDbApp() {
     try {
       for (let index = 0; index < videos.length; index++) {
         const file = videos[index];
-        const chunks = await decodeVideoFile(file, (progress) =>
+        const reportProgress = (progress: DecodeVideoProgress) =>
           setDecodeProgress({
             ...progress,
             phase: videos.length > 1 ? `Video ${index + 1}/${videos.length}: ${progress.phase.toLowerCase()}` : progress.phase
-          })
-        );
+          });
+        let chunks: DecodeResult[];
+        try {
+          chunks = await decodeVideoFile(file, reportProgress);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!message.includes("video metadata")) throw error;
+          reportProgress({ phase: "Retrying video load", completed: 0, total: 1 });
+          await new Promise((resolve) => window.setTimeout(resolve, 500));
+          chunks = await decodeVideoFile(file, reportProgress);
+        }
         const recoveredChunks = chunks.filter((chunk) => chunk.ok && chunk.kind === "data");
         for (const chunk of recoveredChunks) {
           if (!recoveredByIndex.has(chunk.chunkIndex)) recoveredByIndex.set(chunk.chunkIndex, chunk);

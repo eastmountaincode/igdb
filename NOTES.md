@@ -175,3 +175,30 @@ Relevant research directions:
 - High-capacity color QR/barcode decoding: learned or calibrated color classification, cross-module color interference, geometric correction.
 - Display-to-camera communication: frame synchronization, robust block layouts, color recognition, and DCT/spectral embedding.
 - Video watermarking against H.264/H.265: inter-frame compression punishes high-frequency random noise; robust data should live in larger, stable, repeated blocks or transform-domain features.
+
+## 2026-07-12 Encoding Performance Experiment
+
+Accepted codec settings on `experiment/encode-performance`:
+
+```text
+720x720 canvas / 4px cells / 6 colors
+30 fps / 3 repeats / XOR parity 16+1
+6 Mbps H.264 / constant bitrate / realtime latency mode
+two segment encoders for multi-video files
+video-only payloads on every browser; the environment-dependent AAC path is bypassed
+realtime VBR fallback when the browser cannot encode constant-bitrate H.264
+```
+
+The accepted one-megabyte benchmark improved from 112 seconds on the original codec to roughly 47 seconds. Against the immediately preceding optimized codec, constant-bitrate realtime encoding improved the controlled benchmark from 53.0 seconds to 46.8 seconds. Both the realtime VBR candidate and the final CBR candidate recovered 143/143 chunks with exact SHA-256 matches after Instagram transcoding.
+
+Instagram evidence:
+
+```text
+8 MB / three-part carousel: https://www.instagram.com/p/DasuMEijWsG/
+realtime VBR / exact 1 MB recovery: https://www.instagram.com/reel/Das4RxOEYP9/
+realtime CBR / exact 1 MB recovery: https://www.instagram.com/reel/Das5kvgFqkq/
+```
+
+An eight-megabyte source encoded into three carousel videos in 3:33 with two-way segment concurrency. The local round trip recovered 1,142/1,142 chunks and matched SHA-256. The published Instagram carousel returned all three CDN parts with 517 + 517 + 108 CRC-valid data chunks.
+
+Rejected experiments included 3px cells, two repeats, 3 Mbps, predictive H.264 frames, three-way segment concurrency, four- and eight-color alphabets, and smaller 704px geometry. Each was rejected for Instagram data loss, local data loss, slower measured wall time, or no reliable gain.

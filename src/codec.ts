@@ -8,9 +8,9 @@ import {
   synthesizeDtmfProbePackets
 } from "./audio-codec";
 
-export const CANVAS_SIZE = 1080;
-export const CELL_SIZE = 6;
-export const GRID_ORIGIN = 72;
+export const CANVAS_SIZE = 720;
+export const CELL_SIZE = 4;
+export const GRID_ORIGIN = 48;
 export const GRID_CELLS = 156;
 export const MAX_POST_IMAGES = 8;
 export const palette = [
@@ -27,12 +27,12 @@ export const HEADER_BYTES = 512;
 export const RAW_CHUNK_BYTES = Math.floor((SYMBOL_COUNT * Math.log2(SYMBOL_RADIX)) / 8);
 export const PAYLOAD_BYTES_PER_IMAGE = RAW_CHUNK_BYTES - HEADER_BYTES;
 export const VIDEO_FPS = 30;
-export const VIDEO_REPEAT_FRAMES = 6;
-export const VIDEO_PARITY_GROUP_SIZE = 2;
+export const VIDEO_REPEAT_FRAMES = 3;
+export const VIDEO_PARITY_GROUP_SIZE = 16;
 export const VIDEO_TARGET_SECONDS = 55;
 const AUDIO_PACKETS_PER_VIDEO = Math.floor(VIDEO_TARGET_SECONDS / AUDIO_PROBE_DURATION_SECONDS);
 const AUDIO_PAYLOAD_BYTES = AUDIO_PACKETS_PER_VIDEO * AUDIO_PROBE_PAYLOAD_BYTES;
-export const VIDEO_BITRATE = 12_000_000;
+export const VIDEO_BITRATE = 6_000_000;
 export const VIDEO_EFFECTIVE_BYTES_PER_SECOND = Math.floor(
   (PAYLOAD_BYTES_PER_IMAGE * VIDEO_FPS * VIDEO_PARITY_GROUP_SIZE) /
     (VIDEO_REPEAT_FRAMES * (VIDEO_PARITY_GROUP_SIZE + 1))
@@ -192,7 +192,7 @@ type SerializedDecodeResult = Omit<DecodeResult, "payload"> & {
 const MAGIC = [70, 84, 73, 71]; // FTIG
 const VERSION = 1;
 const ENCODE_WORKER_COUNT = 2;
-const SEGMENT_ENCODE_CONCURRENCY = 1;
+const SEGMENT_ENCODE_CONCURRENCY = 2;
 const DECODE_WORKER_COUNT = 2;
 const DECODE_WORKER_BACKLOG = DECODE_WORKER_COUNT * 3;
 const ENABLE_ENCODE_WORKERS = false;
@@ -315,14 +315,7 @@ export async function encodeFileAsVideos(
   file: File,
   onProgress?: (progress: EncodeVideoProgress) => void
 ): Promise<EncodedVideo[]> {
-  try {
-    return await encodeFileAsHybridVideos(file, onProgress);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.includes("encoder configuration") || !message.includes("mp4a.40.2")) throw error;
-    onProgress?.({ phase: "Audio unavailable; encoding video only", completed: 0, total: 1 });
-    return encodeFileAsVideosWithRepeat(file, VIDEO_REPEAT_FRAMES, onProgress);
-  }
+  return encodeFileAsVideosWithRepeat(file, VIDEO_REPEAT_FRAMES, onProgress);
 }
 
 async function encodeFileAsHybridVideos(
@@ -893,7 +886,7 @@ export async function decodeVideoFileTemporalVote(
     const ctx = requiredContext(canvas);
     const duration = Number.isFinite(video.duration) ? video.duration : 0;
     const totalFrames = Math.max(1, Math.floor(duration * VIDEO_FPS));
-    const symbolGroups = new Map<number, number[][]>();
+    const sampledFrames: number[][] = [];
 
     for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
       const time = Math.min(Math.max(0, (frameIndex + 0.5) / VIDEO_FPS), Math.max(0, duration - 0.001));
@@ -902,19 +895,17 @@ export async function decodeVideoFileTemporalVote(
       ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
       ctx.drawImage(video, 0, 0, CANVAS_SIZE, CANVAS_SIZE);
       const imageData = ctx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE).data;
-      const groupIndex = Math.floor(frameIndex / repeatFrames);
-      const group = symbolGroups.get(groupIndex) ?? [];
-      group.push(readSymbolsFromImageData(imageData));
-      symbolGroups.set(groupIndex, group);
+      sampledFrames.push(readSymbolsFromImageData(imageData));
       onProgress?.({ phase: "Sampling repeated frames", completed: frameIndex + 1, total: totalFrames });
       if (frameIndex % 8 === 7) await yieldToBrowser();
     }
 
     const byChunk = new Map<number, DecodeResult>();
+    const windowCount = Math.max(1, sampledFrames.length - repeatFrames + 1);
     let decodedGroups = 0;
-    for (const group of symbolGroups.values()) {
+    for (let start = 0; start < windowCount; start++) {
       try {
-        const decoded = decodeSymbols(majoritySymbols(group));
+        const decoded = decodeSymbols(majoritySymbols(sampledFrames.slice(start, start + repeatFrames)));
         if (decoded.ok && !byChunk.has(decoded.chunkIndex)) {
           byChunk.set(decoded.chunkIndex, decoded);
         }
@@ -922,7 +913,7 @@ export async function decodeVideoFileTemporalVote(
         // Compression damage can still make a whole repeated group undecodable.
       }
       decodedGroups++;
-      onProgress?.({ phase: "Majority-vote decoding", completed: decodedGroups, total: symbolGroups.size });
+      onProgress?.({ phase: "Sliding temporal decoding", completed: decodedGroups, total: windowCount });
       if (decodedGroups % 8 === 0) await yieldToBrowser();
     }
 
@@ -1306,17 +1297,38 @@ function drawEncodedChunk(ctx: CanvasRenderingContext2D, header: Header, payload
 
   const packed = packChunk(header, payload);
   const symbols = bytesToSymbols(packed);
-  let pointer = 0;
-  for (let row = 0; row < GRID_CELLS; row++) {
-    for (let col = 0; col < GRID_CELLS; col++) {
-      const symbol = symbols[pointer++] ?? 0;
-      const [r, g, b] = palette[symbol];
-      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-      ctx.fillRect(GRID_ORIGIN + col * CELL_SIZE, GRID_ORIGIN + row * CELL_SIZE, CELL_SIZE, CELL_SIZE);
-    }
-  }
+  drawSymbolGrid(ctx, symbols);
 
   drawCalibration(ctx);
+}
+
+let symbolGridCanvas: HTMLCanvasElement | null = null;
+
+function drawSymbolGrid(ctx: CanvasRenderingContext2D, symbols: number[]) {
+  if (!symbolGridCanvas) {
+    symbolGridCanvas = document.createElement("canvas");
+    symbolGridCanvas.width = GRID_CELLS;
+    symbolGridCanvas.height = GRID_CELLS;
+  }
+  const gridContext = requiredContext(symbolGridCanvas);
+  const image = gridContext.createImageData(GRID_CELLS, GRID_CELLS);
+  for (let index = 0; index < symbols.length; index++) {
+    const [r, g, b] = palette[symbols[index] ?? 0];
+    const pixel = index * 4;
+    image.data[pixel] = r;
+    image.data[pixel + 1] = g;
+    image.data[pixel + 2] = b;
+    image.data[pixel + 3] = 255;
+  }
+  gridContext.putImageData(image, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(
+    symbolGridCanvas,
+    GRID_ORIGIN,
+    GRID_ORIGIN,
+    GRID_CELLS * CELL_SIZE,
+    GRID_CELLS * CELL_SIZE
+  );
 }
 
 async function recordCanvasesAsMp4(
@@ -1331,8 +1343,8 @@ async function recordCanvasesAsMp4(
 
   const { BufferTarget, CanvasSource, Mp4OutputFormat, Output } = await import("mediabunny");
   const format = new Mp4OutputFormat({ fastStart: "in-memory" });
-  const videoCodec = await pickInstagramVideoCodec(format);
-  if (!videoCodec) {
+  const videoEncoder = await pickInstagramVideoEncoder(format);
+  if (!videoEncoder) {
     throw new Error("This browser cannot encode H.264 MP4 video. Try Safari or a current Chromium browser.");
   }
 
@@ -1346,8 +1358,10 @@ async function recordCanvasesAsMp4(
     target
   });
   const source = new CanvasSource(stage, {
-    codec: videoCodec,
-    bitrate: VIDEO_BITRATE
+    codec: videoEncoder.codec,
+    bitrate: VIDEO_BITRATE,
+    bitrateMode: videoEncoder.bitrateMode,
+    latencyMode: "realtime"
   });
   output.addVideoTrack(source, {
     frameRate: fps
@@ -1389,8 +1403,8 @@ async function recordChunkJobsAsMp4(
 
   const { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output } = await import("mediabunny");
   const format = new Mp4OutputFormat({ fastStart: "in-memory" });
-  const videoCodec = await pickInstagramVideoCodec(format);
-  if (!videoCodec) {
+  const videoEncoder = await pickInstagramVideoEncoder(format);
+  if (!videoEncoder) {
     throw new Error("This browser cannot encode H.264 MP4 video. Try Safari or a current Chromium browser.");
   }
 
@@ -1404,8 +1418,10 @@ async function recordChunkJobsAsMp4(
     target
   });
   const source = new CanvasSource(stage, {
-    codec: videoCodec,
-    bitrate: VIDEO_BITRATE
+    codec: videoEncoder.codec,
+    bitrate: VIDEO_BITRATE,
+    bitrateMode: videoEncoder.bitrateMode,
+    latencyMode: "realtime"
   });
   output.addVideoTrack(source, {
     frameRate: fps
@@ -1606,14 +1622,24 @@ function yieldToBrowser() {
   return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
-async function pickInstagramVideoCodec(format: { getSupportedVideoCodecs: () => string[] }) {
-  const { getFirstEncodableVideoCodec } = await import("mediabunny");
+async function pickInstagramVideoEncoder(format: { getSupportedVideoCodecs: () => string[] }) {
+  const { canEncodeVideo, getFirstEncodableVideoCodec } = await import("mediabunny");
   const codecs = format.getSupportedVideoCodecs().filter((codec) => codec === "avc");
-  return getFirstEncodableVideoCodec(codecs, {
+  const codec = await getFirstEncodableVideoCodec(codecs, {
     width: CANVAS_SIZE,
     height: CANVAS_SIZE,
     bitrate: VIDEO_BITRATE
   });
+  if (!codec) return null;
+
+  const supportsConstantBitrate = await canEncodeVideo(codec, {
+    width: CANVAS_SIZE,
+    height: CANVAS_SIZE,
+    bitrate: VIDEO_BITRATE,
+    bitrateMode: "constant",
+    latencyMode: "realtime"
+  });
+  return { codec, bitrateMode: supportsConstantBitrate ? "constant" as const : "variable" as const };
 }
 
 function waitForVideoMetadata(video: HTMLVideoElement) {
@@ -1772,12 +1798,12 @@ function drawCalibration(ctx: CanvasRenderingContext2D) {
   for (let i = 0; i < palette.length; i++) {
     const [r, g, b] = palette[i];
     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-    ctx.fillRect(242 + i * 48, 21, 36, 36);
+    ctx.fillRect(242 + i * 48, 15, 24, 24);
   }
 }
 
 function readCalibrationSwatches(imageData: Uint8ClampedArray) {
-  return palette.map((_, i) => sampleAverageRgb(imageData, 242 + i * 48 + 18, 21 + 18, 8));
+  return palette.map((_, i) => sampleAverageRgb(imageData, 242 + i * 48 + 12, 15 + 12, 6));
 }
 
 function sampleRgb(imageData: Uint8ClampedArray, x: number, y: number) {

@@ -22,6 +22,8 @@ Branches:
 - `feature/instagram-api-upload`: Meta Instagram API publishing integration.
 - `experiment/encode-performance`: iterative encoding-speed and payload-capacity research; preserve byte-perfect recovery and publishing behavior while benchmarking each codec change.
 
+The accepted performance profile is 720px, 4px cells, six colors, three repeats, XOR parity 16+1, 6 Mbps H.264 with constant bitrate and realtime latency mode, and two-way segment concurrency. Browsers without CBR support fall back to the separately Instagram-verified realtime VBR mode. Do not weaken it based on local decoding alone; every codec change must survive an Instagram publish/download round trip and final SHA-256 verification.
+
 The intended boundary is:
 
 1. The browser generates an ordered set of MP4 blobs and accepts a user-editable caption.

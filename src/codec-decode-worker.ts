@@ -116,7 +116,7 @@ function bitsToBytes(profile: WorkerCodecProfile, symbols: number[]) {
 }
 
 function readCalibrationSwatches(profile: WorkerCodecProfile, imageData: Uint8ClampedArray) {
-  return profile.palette.map((_, i) => sampleAverageRgb(profile, imageData, 242 + i * 48 + 18, 21 + 18, 8));
+  return profile.palette.map((_, i) => sampleAverageRgb(profile, imageData, 242 + i * 48 + 12, 15 + 12, 6));
 }
 
 function sampleRgb(profile: WorkerCodecProfile, imageData: Uint8ClampedArray, x: number, y: number) {
