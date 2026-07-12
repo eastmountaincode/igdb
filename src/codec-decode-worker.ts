@@ -14,6 +14,9 @@ type Header = {
   chunkCrc: number;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
+  parityStartIndex?: number;
+  parityMemberCount?: number;
+  parityLastMemberLength?: number;
 };
 
 type WorkerCodecProfile = {
@@ -84,6 +87,7 @@ function decodeImageData(profile: WorkerCodecProfile, imageData: Uint8ClampedArr
   const payload = allBytes.slice(payloadStart, payloadStart + header.payloadLength);
   const crcOk = crc32(payload) === header.chunkCrc;
   const payloadBuffer = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength) as ArrayBuffer;
+  const parityMembers = expandParityMembers(profile, header);
 
   return {
     ok: crcOk,
@@ -96,9 +100,21 @@ function decodeImageData(profile: WorkerCodecProfile, imageData: Uint8ClampedArr
     totalChunks: header.totalChunks,
     payload: payloadBuffer,
     message: crcOk ? "decoded" : "decoded with checksum mismatch",
-    parityMemberIndexes: header.parityMemberIndexes,
-    parityMemberLengths: header.parityMemberLengths
+    parityMemberIndexes: parityMembers.indexes,
+    parityMemberLengths: parityMembers.lengths
   };
+}
+
+function expandParityMembers(profile: WorkerCodecProfile, header: Header) {
+  if (header.parityMemberIndexes?.length) {
+    return { indexes: header.parityMemberIndexes, lengths: header.parityMemberLengths ?? [] };
+  }
+  const count = header.parityMemberCount ?? 0;
+  const start = header.parityStartIndex ?? 0;
+  const indexes = Array.from({ length: count }, (_, index) => start + index);
+  const lengths = new Array<number>(count).fill(profile.rawChunkBytes - profile.headerBytes);
+  if (count && header.parityLastMemberLength !== undefined) lengths[count - 1] = header.parityLastMemberLength;
+  return { indexes, lengths };
 }
 
 function bitsToBytes(profile: WorkerCodecProfile, symbols: number[]) {

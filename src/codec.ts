@@ -119,6 +119,9 @@ type Header = {
   chunkCrc: number;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
+  parityStartIndex?: number;
+  parityMemberCount?: number;
+  parityLastMemberLength?: number;
 };
 
 type ChunkKind = "data" | "xor";
@@ -437,7 +440,7 @@ async function encodeVideoSegment({
   for (let groupStart = 0; groupStart < dataPayloads.length; groupStart += VIDEO_PARITY_GROUP_SIZE) {
     const group = dataPayloads.slice(groupStart, groupStart + VIDEO_PARITY_GROUP_SIZE);
     const parityPayload = xorPayloads(group);
-    const memberIndexes = group.map((_, index) => chunkStart + groupStart + index);
+    const parityStartIndex = chunkStart + groupStart;
     renderJobs.push({
       order: renderJobs.length,
       header: {
@@ -450,8 +453,9 @@ async function encodeVideoSegment({
         totalChunks,
         payloadLength: parityPayload.length,
         chunkCrc: crc32(parityPayload),
-        parityMemberIndexes: memberIndexes,
-        parityMemberLengths: group.map((payload) => payload.length)
+        parityStartIndex,
+        parityMemberCount: group.length,
+        parityLastMemberLength: group.at(-1)?.length
       },
       payload: parityPayload
     });
@@ -599,7 +603,7 @@ async function encodeHybridVideoSegment({
   for (let groupStart = 0; groupStart < dataPayloads.length; groupStart += VIDEO_PARITY_GROUP_SIZE) {
     const group = dataPayloads.slice(groupStart, groupStart + VIDEO_PARITY_GROUP_SIZE);
     const parityPayload = xorPayloads(group);
-    const memberIndexes = group.map((_, index) => segment.visualChunks[groupStart + index].chunkIndex);
+    const parityStartIndex = segment.visualChunks[groupStart].chunkIndex;
     renderJobs.push({
       order: renderJobs.length,
       header: {
@@ -612,8 +616,9 @@ async function encodeHybridVideoSegment({
         totalChunks,
         payloadLength: parityPayload.length,
         chunkCrc: crc32(parityPayload),
-        parityMemberIndexes: memberIndexes,
-        parityMemberLengths: group.map((payload) => payload.length)
+        parityStartIndex,
+        parityMemberCount: group.length,
+        parityLastMemberLength: group.at(-1)?.length
       },
       payload: parityPayload
     });
@@ -999,6 +1004,7 @@ function decodeSymbols(symbols: number[]): DecodeResult {
   const payloadStart = HEADER_BYTES;
   const payload = allBytes.slice(payloadStart, payloadStart + header.payloadLength);
   const crcOk = crc32(payload) === header.chunkCrc;
+  const parityMembers = expandParityMembers(header);
 
   return {
     ok: crcOk,
@@ -1011,9 +1017,21 @@ function decodeSymbols(symbols: number[]): DecodeResult {
     totalChunks: header.totalChunks,
     payload,
     message: crcOk ? "decoded" : "decoded with checksum mismatch",
-    parityMemberIndexes: header.parityMemberIndexes,
-    parityMemberLengths: header.parityMemberLengths
+    parityMemberIndexes: parityMembers.indexes,
+    parityMemberLengths: parityMembers.lengths
   };
+}
+
+function expandParityMembers(header: Header) {
+  if (header.parityMemberIndexes?.length) {
+    return { indexes: header.parityMemberIndexes, lengths: header.parityMemberLengths ?? [] };
+  }
+  const count = header.parityMemberCount ?? 0;
+  const start = header.parityStartIndex ?? 0;
+  const indexes = Array.from({ length: count }, (_, index) => start + index);
+  const lengths = new Array<number>(count).fill(PAYLOAD_BYTES_PER_IMAGE);
+  if (count && header.parityLastMemberLength !== undefined) lengths[count - 1] = header.parityLastMemberLength;
+  return { indexes, lengths };
 }
 
 function majoritySymbols(groups: number[][]) {

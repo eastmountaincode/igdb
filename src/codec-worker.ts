@@ -17,6 +17,9 @@ type Header = {
   chunkCrc: number;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
+  parityStartIndex?: number;
+  parityMemberCount?: number;
+  parityLastMemberLength?: number;
 };
 
 type WorkerCodecProfile = {

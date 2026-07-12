@@ -187,6 +187,7 @@ Accepted codec settings on `experiment/encode-performance`:
 two segment encoders for multi-video files
 video-only payloads on every browser; the environment-dependent AAC path is bypassed
 realtime VBR fallback when the browser cannot encode constant-bitrate H.264
+compact parity headers store contiguous start/count/last-length metadata instead of redundant arrays
 ```
 
 The accepted one-megabyte benchmark improved from 112 seconds on the original codec to roughly 47 seconds. Against the immediately preceding optimized codec, constant-bitrate realtime encoding improved the controlled benchmark from 53.0 seconds to 46.8 seconds. Both the realtime VBR candidate and the final CBR candidate recovered 143/143 chunks with exact SHA-256 matches after Instagram transcoding.
@@ -197,7 +198,10 @@ Instagram evidence:
 8 MB / three-part carousel: https://www.instagram.com/p/DasuMEijWsG/
 realtime VBR / exact 1 MB recovery: https://www.instagram.com/reel/Das4RxOEYP9/
 realtime CBR / exact 1 MB recovery: https://www.instagram.com/reel/Das5kvgFqkq/
+compact parity header / exact 1 MB recovery: https://www.instagram.com/reel/Das90-XANXH/
 ```
+
+The compact parity-header follow-up encoded a one-megabyte random fixture in 39.2 seconds and survived Instagram with 143/143 chunks plus an exact SHA-256 match. Parity 32 was rejected in a same-machine control (44.5 seconds versus 39.2 seconds for parity 16), so the accepted recovery group remains 16+1.
 
 An eight-megabyte source encoded into three carousel videos in 3:33 with two-way segment concurrency. The local round trip recovered 1,142/1,142 chunks and matched SHA-256. The published Instagram carousel returned all three CDN parts with 517 + 517 + 108 CRC-valid data chunks.
 
