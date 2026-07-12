@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import "./igdb.css";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const styles = readFileSync(join(process.cwd(), "src/app/igdb.css"), "utf8");
 
 export const metadata: Metadata = {
   title: "IGDB",
@@ -14,6 +17,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <style dangerouslySetInnerHTML={{ __html: styles }} />
+      </head>
       <body>{children}</body>
     </html>
   );
