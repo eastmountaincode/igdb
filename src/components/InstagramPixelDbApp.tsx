@@ -13,7 +13,7 @@ import {
   type EncodedVideo
 } from "@/codec";
 import { buildInstagramCaption } from "@/instagram-caption";
-import { MAX_SOURCE_FILE_BYTES, MAX_SOURCE_FILE_LABEL } from "@/upload-limits";
+import { MAX_SOURCE_FILE_BYTES, MAX_SOURCE_FILE_LABEL, WRITE_SPEED_LABEL } from "@/upload-limits";
 
 type ActiveTab = "read" | "write";
 
@@ -285,6 +285,7 @@ export function InstagramPixelDbApp() {
           <fieldset className="panel write-source">
             <legend>write</legend>
             <p className="file-limit">maximum file size: {MAX_SOURCE_FILE_LABEL}</p>
+            <p className="file-limit">write speed: {WRITE_SPEED_LABEL}</p>
             <label
               className={`dropzone${isFileDragActive ? " drag-active" : ""}`}
               htmlFor="file-input"

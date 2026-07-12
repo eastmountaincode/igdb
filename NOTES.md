@@ -208,4 +208,6 @@ The compact parity-header follow-up encoded a one-megabyte random fixture in 39.
 
 With fixed-block symbol conversion, an eight-megabyte source encoded into three carousel videos in 29.0 seconds. The local round trip recovered 1,154/1,154 chunks with an exact SHA-256 match. After publishing the exact files as an Instagram carousel, downloading all three CDN-transcoded children, and decoding them together, the reader recovered 517 + 517 + 120 chunks. The reconstructed 8,388,608-byte file matched the source SHA-256 exactly: `a5c7577392284211973f4d1bc1081e023b6e9f9d69c2a79a7d832c2cb1dbcfc3`.
 
+The public upload limit is 28 MiB. At 517 data chunks per video and 7,272 payload bytes per chunk, eight Instagram carousel videos carry 30,076,992 bytes; 28 MiB fits, while 29 MiB requires a ninth video. The interface describes the measured one-megabyte write speed as about 1 MB per 6.15 seconds.
+
 Rejected experiments included 3px cells, two repeats, 3 Mbps, predictive H.264 frames, three-way segment concurrency, four- and eight-color alphabets, and smaller 704px geometry. Each was rejected for Instagram data loss, local data loss, slower measured wall time, or no reliable gain.
