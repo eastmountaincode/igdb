@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -144,12 +144,26 @@ export async function publishStagedInstagramVideos(input: {
   mediaBaseUrl: string;
 }) {
   const id = safeSegment(input.uploadId);
-  const job = JSON.parse(await readFile(join(JOB_ROOT, id, "job.json"), "utf8")) as StagedJob;
-  if (job.mediaToken !== input.uploadToken) throw new Error("Invalid upload session.");
-  if (job.files.length !== job.totalParts) throw new Error("Not all video parts finished uploading.");
-  job.caption = buildInstagramCaption(input.metadata);
-  await writeFile(join(JOB_ROOT, id, "job.json"), JSON.stringify(job));
-  return publishStagedJob(job, input.mediaBaseUrl);
+  const directory = join(JOB_ROOT, id);
+  const lockPath = join(directory, ".publishing");
+  try {
+    const lock = await open(lockPath, "wx");
+    await lock.close();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("This upload is already being published.");
+    throw error;
+  }
+  try {
+    const job = JSON.parse(await readFile(join(directory, "job.json"), "utf8")) as StagedJob;
+    if (job.mediaToken !== input.uploadToken) throw new Error("Invalid upload session.");
+    if (job.files.length !== job.totalParts) throw new Error("Not all video parts finished uploading.");
+    job.caption = buildInstagramCaption(input.metadata);
+    await writeFile(join(directory, "job.json"), JSON.stringify(job));
+    return await publishStagedJob(job, input.mediaBaseUrl);
+  } catch (error) {
+    await rm(lockPath, { force: true });
+    throw error;
+  }
 }
 
 export async function readStagedMedia(jobId: string, fileName: string, token: string) {
