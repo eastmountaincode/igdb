@@ -17,6 +17,7 @@ type StagedJob = {
   mediaToken: string;
   caption: string;
   files: string[];
+  totalParts: number;
   createdAt: string;
 };
 
@@ -84,6 +85,73 @@ export async function publishInstagramVideos(input: {
   }
 }
 
+export async function stageInstagramVideoPart(input: {
+  video: File;
+  audioPayload?: File;
+  partIndex: number;
+  totalParts: number;
+  uploadId?: string;
+  uploadToken?: string;
+}) {
+  const id = input.uploadId ? safeSegment(input.uploadId) : randomUUID();
+  const directory = join(JOB_ROOT, id);
+  await mkdir(directory, { recursive: true });
+
+  let job: StagedJob;
+  if (input.uploadId) {
+    job = JSON.parse(await readFile(join(directory, "job.json"), "utf8")) as StagedJob;
+    if (job.mediaToken !== input.uploadToken || job.totalParts !== input.totalParts) throw new Error("Invalid upload session.");
+  } else {
+    job = {
+      id,
+      mediaToken: randomBytes(24).toString("hex"),
+      caption: "",
+      files: [],
+      totalParts: input.totalParts,
+      createdAt: new Date().toISOString()
+    };
+  }
+
+  const fileName = `part-${String(input.partIndex + 1).padStart(2, "0")}.mp4`;
+  const inputPath = join(directory, `input-${String(input.partIndex + 1).padStart(2, "0")}.mp4`);
+  await writeFile(inputPath, Buffer.from(await input.video.arrayBuffer()));
+  try {
+    if (input.audioPayload) {
+      await muxDtmfAudio(
+        inputPath,
+        join(directory, fileName),
+        new Uint8Array(await input.audioPayload.arrayBuffer()),
+        directory,
+        input.partIndex
+      );
+    } else {
+      await writeFile(join(directory, fileName), Buffer.from(await input.video.arrayBuffer()));
+    }
+  } finally {
+    await rm(inputPath, { force: true });
+  }
+
+  if (!job.files.includes(fileName)) job.files.push(fileName);
+  job.files.sort();
+  await writeFile(join(directory, "job.json"), JSON.stringify(job));
+  return { uploadId: job.id, uploadToken: job.mediaToken, uploadedParts: job.files.length };
+}
+
+export async function publishStagedInstagramVideos(input: {
+  uploadId: string;
+  uploadToken: string;
+  metadata: InstagramFileMetadata;
+  mediaBaseUrl: string;
+}) {
+  const id = safeSegment(input.uploadId);
+  const job = JSON.parse(await readFile(join(JOB_ROOT, id, "job.json"), "utf8")) as StagedJob;
+  if (job.mediaToken !== input.uploadToken) throw new Error("Invalid upload session.");
+  if (job.files.length !== job.totalParts) throw new Error("Not all video parts finished uploading.");
+  job.caption = buildInstagramCaption(input.metadata);
+  await writeFile(join(JOB_ROOT, id, "job.json"), JSON.stringify(job));
+  return publishStagedJob(job, input.mediaBaseUrl);
+}
+
 export async function readStagedMedia(jobId: string, fileName: string, token: string) {
   const safeJobId = safeSegment(jobId);
   const safeFileName = safeSegment(fileName);
@@ -117,10 +185,59 @@ async function stageJob(videos: File[], audioPayloads: File[], metadata: Instagr
     mediaToken: randomBytes(24).toString("hex"),
     caption: buildInstagramCaption(metadata),
     files,
+    totalParts: files.length,
     createdAt: new Date().toISOString()
   };
   await writeFile(join(directory, "job.json"), JSON.stringify(job));
   return job;
+}
+
+async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
+  const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN_NORMAL_SHOPKEEP;
+  if (!accessToken) throw new Error("Instagram publishing is not configured.");
+  try {
+    const childIds: string[] = [];
+    for (let index = 0; index < job.files.length; index += 1) {
+      const mediaUrl = `${mediaBaseUrl}/api/instagram/media/${job.id}/${encodeURIComponent(job.files[index])}?token=${job.mediaToken}`;
+      const child = await graphPost(`/${INSTAGRAM_ACCOUNT_ID}/media`, {
+        media_type: job.files.length === 1 ? "REELS" : "VIDEO",
+        video_url: mediaUrl,
+        ...(job.files.length === 1
+          ? { caption: job.caption, share_to_feed: "true" }
+          : { is_carousel_item: "true" })
+      }, accessToken);
+      if (!child.id) throw graphError(child, `Instagram rejected video ${index + 1}.`);
+      await waitForContainer(child.id, accessToken);
+      childIds.push(child.id);
+    }
+
+    let creationId = childIds[0];
+    if (childIds.length > 1) {
+      const carousel = await graphPost(`/${INSTAGRAM_ACCOUNT_ID}/media`, {
+        media_type: "CAROUSEL",
+        children: childIds.join(","),
+        caption: job.caption
+      }, accessToken);
+      if (!carousel.id) throw graphError(carousel, "Instagram rejected the carousel.");
+      await waitForContainer(carousel.id, accessToken);
+      creationId = carousel.id;
+    }
+
+    const published = await graphPost(`/${INSTAGRAM_ACCOUNT_ID}/media_publish`, { creation_id: creationId }, accessToken);
+    if (!published.id) throw graphError(published, "Instagram did not publish the post.");
+    const media = await graphGet(`/${published.id}`, {
+      fields: "id,permalink,media_type,media_product_type,username"
+    }, accessToken);
+    return {
+      mediaId: published.id,
+      permalink: media.permalink,
+      username: INSTAGRAM_USERNAME,
+      caption: job.caption,
+      parts: childIds.length
+    };
+  } finally {
+    await rm(join(JOB_ROOT, job.id), { recursive: true, force: true });
+  }
 }
 
 export async function muxDtmfAudio(inputPath: string, outputPath: string, payload: Uint8Array, directory: string, index: number) {

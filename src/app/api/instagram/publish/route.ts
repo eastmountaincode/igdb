@@ -1,4 +1,4 @@
-import { publishInstagramVideos } from "@/lib/instagram-publisher";
+import { publishInstagramVideos, publishStagedInstagramVideos } from "@/lib/instagram-publisher";
 import { MAX_SOURCE_FILE_BYTES, MAX_SOURCE_FILE_LABEL } from "@/upload-limits";
 
 export const runtime = "nodejs";
@@ -12,6 +12,29 @@ export async function POST(request: Request) {
   try {
     enforceRateLimit(request);
     const contentType = request.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      const body = await request.json() as Record<string, unknown>;
+      if (body.confirmation !== "publish-to-normal-shopkeep") {
+        return Response.json({ error: "Publishing confirmation is required." }, { status: 400 });
+      }
+      const originalName = requiredValue(body.originalName, "originalName", 255);
+      const originalType = requiredValue(body.originalType, "originalType", 255);
+      const originalSize = Number(body.originalSize);
+      const note = String(body.note ?? "").trim();
+      if (!Number.isSafeInteger(originalSize) || originalSize < 0 || originalSize > MAX_SOURCE_FILE_BYTES) {
+        return Response.json({ error: `Files must be ${MAX_SOURCE_FILE_LABEL} or smaller.` }, { status: 413 });
+      }
+      if (note.length > MAX_NOTE_LENGTH) {
+        return Response.json({ error: `Note must be ${MAX_NOTE_LENGTH} characters or fewer.` }, { status: 400 });
+      }
+      const result = await publishStagedInstagramVideos({
+        uploadId: requiredValue(body.uploadId, "uploadId", 255),
+        uploadToken: requiredValue(body.uploadToken, "uploadToken", 255),
+        metadata: { name: originalName, type: originalType, size: originalSize, note },
+        mediaBaseUrl: getMediaBaseUrl(request)
+      });
+      return Response.json(result);
+    }
     if (!contentType.includes("multipart/form-data")) {
       return Response.json({ error: "Expected a multipart upload." }, { status: 415 });
     }
@@ -53,26 +76,33 @@ export async function POST(request: Request) {
       return Response.json({ error: `Note must be ${MAX_NOTE_LENGTH} characters or fewer.` }, { status: 400 });
     }
 
-    const configuredBaseUrl = process.env.INSTAGRAM_MEDIA_BASE_URL?.replace(/\/$/, "");
-    const forwardedHost = request.headers.get("x-forwarded-host") || request.headers.get("host");
-    const forwardedProto = request.headers.get("x-forwarded-proto");
-    const forwardedOrigin = forwardedHost && forwardedProto ? `${forwardedProto}://${forwardedHost}` : "";
-    const mediaBaseUrl = configuredBaseUrl || forwardedOrigin || new URL(request.url).origin;
-    if (!mediaBaseUrl.startsWith("https://")) {
-      return Response.json({ error: "Instagram publishing requires a public HTTPS site URL." }, { status: 503 });
-    }
-
     const result = await publishInstagramVideos({
       videos,
       audioPayloads,
       metadata: { name: originalName, type: originalType, size: originalSize, note },
-      mediaBaseUrl
+      mediaBaseUrl: getMediaBaseUrl(request)
     });
     return Response.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Instagram publishing failed.";
     return Response.json({ error: message }, { status: 500 });
   }
+}
+
+function requiredValue(value: unknown, field: string, maxLength: number) {
+  const text = String(value ?? "").trim();
+  if (!text || text.length > maxLength) throw new Error(`Invalid ${field}.`);
+  return text;
+}
+
+function getMediaBaseUrl(request: Request) {
+  const configuredBaseUrl = process.env.INSTAGRAM_MEDIA_BASE_URL?.replace(/\/$/, "");
+  const forwardedHost = request.headers.get("x-forwarded-host") || request.headers.get("host");
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  const forwardedOrigin = forwardedHost && forwardedProto ? `${forwardedProto}://${forwardedHost}` : "";
+  const mediaBaseUrl = configuredBaseUrl || forwardedOrigin || new URL(request.url).origin;
+  if (!mediaBaseUrl.startsWith("https://")) throw new Error("Instagram publishing requires a public HTTPS site URL.");
+  return mediaBaseUrl;
 }
 
 function requiredText(form: FormData, field: string, maxLength: number) {

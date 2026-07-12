@@ -195,25 +195,44 @@ export function InstagramPixelDbApp() {
     setPublishMessage("Uploading to @normal_shopkeep...");
     setPublishedUrl("");
     try {
-      const form = new FormData();
-      for (const video of [...encodedVideos].sort((left, right) => left.segmentIndex - right.segmentIndex)) {
-        form.append(
-          "videos",
-          video.blob,
-          generatedVideoFileName(selectedFile.name, video.segmentIndex, video.totalSegments)
-        );
+      const videos = [...encodedVideos].sort((left, right) => left.segmentIndex - right.segmentIndex);
+      let uploadId = "";
+      let uploadToken = "";
+      for (let index = 0; index < videos.length; index += 1) {
+        setPublishMessage(`Uploading video ${index + 1} of ${videos.length}...`);
+        const video = videos[index];
+        const form = new FormData();
+        form.set("video", video.blob, generatedVideoFileName(selectedFile.name, video.segmentIndex, video.totalSegments));
         if (video.audioPayload) {
-          form.append("audioPayloads", video.audioPayload, `part-${video.segmentIndex + 1}.bin`);
+          form.set("audioPayload", video.audioPayload, `part-${video.segmentIndex + 1}.bin`);
         }
+        form.set("partIndex", String(index));
+        form.set("totalParts", String(videos.length));
+        if (uploadId) form.set("uploadId", uploadId);
+        if (uploadToken) form.set("uploadToken", uploadToken);
+        const uploadResponse = await fetch("/api/instagram/upload", { method: "POST", body: form });
+        const uploadResult = await readJsonResponse(uploadResponse);
+        if (!uploadResponse.ok || !uploadResult.uploadId || !uploadResult.uploadToken) {
+          throw new Error(uploadResult.error || `Video ${index + 1} could not be uploaded.`);
+        }
+        uploadId = uploadResult.uploadId;
+        uploadToken = uploadResult.uploadToken;
       }
-      form.set("originalName", selectedFile.name);
-      form.set("originalType", selectedFile.type || "application/octet-stream");
-      form.set("originalSize", String(selectedFile.size));
-      form.set("note", publishNote.trim());
-      form.set("confirmation", "publish-to-normal-shopkeep");
-
-      const response = await fetch("/api/instagram/publish", { method: "POST", body: form });
-      const result = (await response.json()) as { error?: string; permalink?: string; parts?: number };
+      setPublishMessage("Publishing to @normal_shopkeep...");
+      const response = await fetch("/api/instagram/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({
+          uploadId,
+          uploadToken,
+          originalName: selectedFile.name,
+          originalType: selectedFile.type || "application/octet-stream",
+          originalSize: selectedFile.size,
+          note: publishNote.trim(),
+          confirmation: "publish-to-normal-shopkeep"
+        })
+      });
+      const result = await readJsonResponse(response);
       if (!response.ok || !result.permalink) throw new Error(result.error || "Instagram did not return a post URL.");
       setPublishedUrl(result.permalink);
       setPublishMessage(`Published ${result.parts ?? encodedVideos.length} ${pluralize("video", result.parts ?? encodedVideos.length)}.`);
@@ -373,6 +392,21 @@ export function InstagramPixelDbApp() {
       </main>
     </div>
   );
+}
+
+async function readJsonResponse(response: Response) {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    if (response.status === 413) throw new Error("A generated video is too large to upload.");
+    throw new Error(`The server returned an unexpected response (${response.status}).`);
+  }
+  return response.json() as Promise<{
+    error?: string;
+    permalink?: string;
+    parts?: number;
+    uploadId?: string;
+    uploadToken?: string;
+  }>;
 }
 
 function ProgressView({
