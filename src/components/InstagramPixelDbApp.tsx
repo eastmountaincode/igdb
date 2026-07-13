@@ -320,9 +320,7 @@ export function InstagramPixelDbApp() {
         })
       });
       const result = await readJsonResponse(response);
-      if (!response.ok || (!result.mediaId && !result.permalink)) {
-        throw new Error(result.error || "Instagram did not confirm publication.");
-      }
+      if (!response.ok) throw new Error(result.error || "Instagram publishing failed.");
       if (result.permalink) setPublishedUrl(result.permalink);
       setPublishMessage(
         result.permalink

@@ -37,7 +37,7 @@ export async function POST(request: Request) {
         publishRequestId
       });
       console.log("[api/instagram/publish] success", { mediaId: result.mediaId, permalink: result.permalink, parts: result.parts });
-      return Response.json(result);
+      return noStoreJson(result);
     }
     if (!contentType.includes("multipart/form-data")) {
       return Response.json({ error: "Expected a multipart upload." }, { status: 415 });
@@ -87,12 +87,19 @@ export async function POST(request: Request) {
       metadata: { name: originalName, type: originalType, size: originalSize, note },
       mediaBaseUrl: getMediaBaseUrl(request)
     });
-    return Response.json(result);
+    return noStoreJson(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Instagram publishing failed.";
     console.error("[api/instagram/publish] failed", { message });
-    return Response.json({ error: message }, { status: 500 });
+    return noStoreJson({ error: message }, 500);
   }
+}
+
+function noStoreJson(body: unknown, status = 200) {
+  return Response.json(body, {
+    status,
+    headers: { "Cache-Control": "private, no-store, max-age=0" }
+  });
 }
 
 function optionalRequestId(value: unknown) {
