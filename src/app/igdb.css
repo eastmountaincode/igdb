@@ -124,8 +124,18 @@ table {
 }
 
 .site-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   margin-right: 1.5rem;
   padding-bottom: 0.3rem;
+}
+
+.site-title img {
+  display: block;
+  width: 1em;
+  height: 1em;
+  object-fit: cover;
 }
 
 .tabbar {
@@ -283,16 +293,31 @@ dt {
   aspect-ratio: 1;
   border: 0;
   object-fit: contain;
-  background: #000;
+  background: #fff;
 }
 
 .display-video-placeholder {
-  display: grid;
-  place-items: center;
   aspect-ratio: 1;
-  background: #000;
-  color: #fff;
+  padding: 0.75rem;
+  background: #fff;
+  color: #111;
+}
+
+.display-video-placeholder-frame {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  margin: 0;
+  border: 1px solid #000;
+  padding: 0.5rem;
+}
+
+.display-video-placeholder-frame legend {
+  padding-inline: 0.2rem;
   font-family: "Redaction 35", "Times New Roman", Times, serif;
+  font-size: 0.55rem;
+  line-height: 1;
 }
 
 .compact-picker {

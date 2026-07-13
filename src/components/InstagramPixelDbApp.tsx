@@ -332,7 +332,10 @@ export function InstagramPixelDbApp() {
   return (
     <div className="shell">
       <header className="site-header">
-        <span className="site-title">Normal Shopkeep</span>
+        <span className="site-title">
+          <img src="/icon.png" alt="" aria-hidden="true" />
+          Normal Shopkeep
+        </span>
         <nav className="tabbar" aria-label="pages">
           <button
             type="button"
@@ -458,7 +461,10 @@ export function InstagramPixelDbApp() {
                   />
                 ) : (
                   <div className="display-video display-video-placeholder" aria-label="Display video not generated">
-                    {isEncodingDisplayVideo ? "preparing preview..." : null}
+                    <fieldset className="display-video-placeholder-frame">
+                      <legend>Normal Shopkeep</legend>
+                      {isEncodingDisplayVideo ? <span>preparing preview...</span> : null}
+                    </fieldset>
                   </div>
                 )}
               </div>
