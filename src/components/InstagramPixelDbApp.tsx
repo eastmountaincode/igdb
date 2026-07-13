@@ -31,6 +31,8 @@ export function InstagramPixelDbApp() {
   const [isEncodingDisplayVideo, setIsEncodingDisplayVideo] = useState(false);
   const [encodedVideos, setEncodedVideos] = useState<EncodedVideo[]>([]);
   const [decodedChunks, setDecodedChunks] = useState<DecodeResult[]>([]);
+  const [recoveredFile, setRecoveredFile] = useState<{ blob: Blob; fileName: string } | null>(null);
+  const [hasDownloadedRecoveredFile, setHasDownloadedRecoveredFile] = useState(false);
   const [decodeMessages, setDecodeMessages] = useState<string[]>([]);
   const [isEncodingVideo, setIsEncodingVideo] = useState(false);
   const [encodeError, setEncodeError] = useState("");
@@ -99,6 +101,8 @@ export function InstagramPixelDbApp() {
   const decodeLog = buildDecodeSummary(decodedChunks, decodeMessages);
   function resetDecode() {
     setDecodedChunks([]);
+    setRecoveredFile(null);
+    setHasDownloadedRecoveredFile(false);
     setDecodeMessages([]);
     setDecodeProgress(null);
   }
@@ -212,7 +216,7 @@ export function InstagramPixelDbApp() {
     }
   }
 
-  async function decodeVideoFiles(files: File[], downloadWhenComplete = false) {
+  async function decodeVideoFiles(files: File[], prepareDownloadWhenComplete = false) {
     const videos = files.filter((file) => file.type.startsWith("video/") || file.name.toLowerCase().endsWith(".mp4"));
     resetDecode();
     if (!videos.length) return;
@@ -255,15 +259,16 @@ export function InstagramPixelDbApp() {
       }
       setDecodeProgress({ phase: "Decode complete", completed: videos.length, total: videos.length });
       const totalChunks = mergedChunks[0]?.totalChunks ?? 0;
-      if (downloadWhenComplete && totalChunks > 0 && mergedChunks.length === totalChunks) {
+      if (prepareDownloadWhenComplete && totalChunks > 0 && mergedChunks.length === totalChunks) {
         const assembled = await reassemble(mergedChunks);
         if (!assembled.hashOk) throw new Error("Recovered file failed SHA-256 verification.");
-        downloadBlob(assembled.blob, assembled.fileName);
+        setRecoveredFile({ blob: assembled.blob, fileName: assembled.fileName });
+        setHasDownloadedRecoveredFile(false);
         setDecodeMessages((current) => [
           ...current,
-          `Downloaded ${assembled.fileName}. SHA-256 OK.`
+          `Recovered ${assembled.fileName}. SHA-256 OK. Ready to download.`
         ]);
-      } else if (downloadWhenComplete) {
+      } else if (prepareDownloadWhenComplete) {
         throw new Error(`Only ${mergedChunks.length}/${totalChunks || "?"} chunks were recovered.`);
       }
     } catch (error) {
@@ -275,18 +280,25 @@ export function InstagramPixelDbApp() {
   }
 
   async function handleAssemble() {
-    const assembled = await reassemble(decodedChunks);
-    if (!assembled.hashOk) {
-      setDecodeMessages((current) => [
-        ...current,
-        `Download blocked: ${assembled.fileName} failed SHA-256 verification.`
-      ]);
-      return;
+    if (hasDownloadedRecoveredFile) return;
+    let file = recoveredFile;
+    if (!file) {
+      const assembled = await reassemble(decodedChunks);
+      if (!assembled.hashOk) {
+        setDecodeMessages((current) => [
+          ...current,
+          `Download blocked: ${assembled.fileName} failed SHA-256 verification.`
+        ]);
+        return;
+      }
+      file = { blob: assembled.blob, fileName: assembled.fileName };
+      setRecoveredFile(file);
     }
-    downloadBlob(assembled.blob, assembled.fileName);
+    setHasDownloadedRecoveredFile(true);
+    downloadBlob(file.blob, file.fileName);
     setDecodeMessages((current) => [
       ...current,
-      `Downloaded ${assembled.fileName}. SHA-256 OK.`
+      `Downloaded ${file.fileName}. SHA-256 OK.`
     ]);
   }
 
@@ -456,9 +468,10 @@ export function InstagramPixelDbApp() {
             </dl>
 
             <div className="button-row">
-              <button type="button" disabled={!canAssemble} onClick={handleAssemble}>
-                download recovered file
+              <button type="button" disabled={!recoveredFile || hasDownloadedRecoveredFile} onClick={handleAssemble}>
+                {hasDownloadedRecoveredFile ? "Downloaded" : "Download Recovered File"}
               </button>
+              {recoveredFile && !hasDownloadedRecoveredFile ? <span className="next-step-arrow" aria-hidden="true">←</span> : null}
             </div>
 
             {decodeProgress ? <ProgressView progress={decodeProgress} active={isDecodingVideo} label="Decoding progress" /> : null}

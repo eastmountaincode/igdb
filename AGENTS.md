@@ -37,7 +37,7 @@ The API branch publishes only to `@normal_shopkeep`. It reads `INSTAGRAM_ACCESS_
 
 Meta processes all child videos concurrently. Published request IDs are recorded before permalink resolution; if a long publish response is lost at the public proxy, the client polls `/api/instagram/status` and recovers the existing post instead of reporting failure or creating a duplicate.
 
-The Read page accepts an Instagram post or Reel URL from `@normal_shopkeep`. Zo resolves and proxies its ordered video parts through the authorized Instagram API, the existing browser decoder reconstructs and SHA-256 verifies the source, and the recovered file downloads directly. Never expose Instagram CDN URLs or the account token to the browser.
+The Read page accepts an Instagram post or Reel URL from `@normal_shopkeep`. Zo resolves and proxies its ordered video parts through the authorized Instagram API, and the browser decoder reconstructs and SHA-256 verifies the source. After verification, Read presents one arrow-guided download button instead of downloading automatically; the button disables after the first download. Never expose Instagram CDN URLs or the account token to the browser.
 
 Every Write creates an eight-second, 720×720 H.264 **display video** containing the source filename, MIME type, and size. It is always carousel item 1 before the encoded data videos. An optional animated GIF may appear inside its padded safe area. The UI previews the actual generated MP4, not a responsive HTML imitation. The source limit is 25 MB so seven data videos plus the display video stay within Instagram's eight-item limit. Published media IDs and their display-video flag are recorded in the runtime-only `.instagram-media-index.json`, allowing Read to omit item 1 before decoding.
 
