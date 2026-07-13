@@ -19,7 +19,7 @@ import {
   WRITE_SPEED_LABEL
 } from "@/upload-limits";
 
-type ActiveTab = "read" | "write";
+type ActiveTab = "about" | "read" | "write";
 
 export function InstagramPixelDbApp() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("write");
@@ -366,12 +366,32 @@ export function InstagramPixelDbApp() {
           >
             Read
           </button>
+          <button
+            type="button"
+            className={`about-tab${activeTab === "about" ? " active" : ""}`}
+            aria-current={activeTab === "about" ? "page" : undefined}
+            onClick={() => setActiveTab("about")}
+          >
+            About
+          </button>
         </nav>
       </header>
 
       <main>
 
-      {activeTab === "read" ? (
+      {activeTab === "about" ? (
+        <section className="tab-panel about-layout">
+          <fieldset className="panel about-panel">
+            <legend>about</legend>
+            <p>
+              Normal Shopkeep is an experiment in using Instagram as a public file system. Write turns a file into an Instagram carousel: a readable cover followed by videos that encode the file&rsquo;s data.
+            </p>
+            <p>
+              Read reverses the process. Paste the URL of a Normal Shopkeep post to reconstruct and download the original file. Every recovered file must pass its original SHA-256 checksum before it can be downloaded.
+            </p>
+          </fieldset>
+        </section>
+      ) : activeTab === "read" ? (
         <section className="tab-panel read-layout">
           <fieldset className="panel read-source">
             <legend>read</legend>
