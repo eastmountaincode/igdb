@@ -10,7 +10,7 @@ export async function encodeGifCoverVideo(
   metadata: InstagramFileMetadata,
   onProgress?: (progress: EncodeVideoProgress) => void
 ) {
-  await document.fonts.load('38px "Los Angeles"');
+  await document.fonts.load('38px "Redaction 35"');
   if (gifFile && !gifFile.type.includes("gif") && !gifFile.name.toLowerCase().endsWith(".gif")) {
     throw new Error("The cover must be a GIF.");
   }
@@ -124,12 +124,12 @@ function drawCoverFrame(context: CanvasRenderingContext2D, gifFrame: HTMLCanvasE
 function fitFont(context: CanvasRenderingContext2D, text: string, maxWidth: number, startingSize: number) {
   let size = startingSize;
   while (size > 16) {
-    const font = `${size}px "Los Angeles", "Times New Roman", Times, serif`;
+    const font = `${size}px "Redaction 35", "Times New Roman", Times, serif`;
     context.font = font;
     if (context.measureText(text).width <= maxWidth) return font;
     size -= 1;
   }
-  return `16px "Los Angeles", "Times New Roman", Times, serif`;
+  return `16px "Redaction 35", "Times New Roman", Times, serif`;
 }
 
 function blankFrame() {
