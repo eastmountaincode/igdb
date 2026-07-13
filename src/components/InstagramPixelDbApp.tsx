@@ -304,9 +304,15 @@ export function InstagramPixelDbApp() {
         })
       });
       const result = await readJsonResponse(response);
-      if (!response.ok || !result.permalink) throw new Error(result.error || "Instagram did not return a post URL.");
-      setPublishedUrl(result.permalink);
-      setPublishMessage(`Published ${result.parts ?? uploadParts.length} ${pluralize("video", result.parts ?? uploadParts.length)}.`);
+      if (!response.ok || (!result.mediaId && !result.permalink)) {
+        throw new Error(result.error || "Instagram did not confirm publication.");
+      }
+      if (result.permalink) setPublishedUrl(result.permalink);
+      setPublishMessage(
+        result.permalink
+          ? `Published ${result.parts ?? uploadParts.length} ${pluralize("video", result.parts ?? uploadParts.length)}.`
+          : "Published. Instagram is still preparing the post link."
+      );
     } catch (error) {
       setPublishMessage(error instanceof Error ? error.message : "Instagram publishing failed.");
     } finally {
@@ -485,6 +491,7 @@ async function readJsonResponse(response: Response) {
   }
   return response.json() as Promise<{
     error?: string;
+    mediaId?: string;
     permalink?: string;
     parts?: number;
     uploadId?: string;
