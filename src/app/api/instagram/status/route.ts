@@ -1,4 +1,4 @@
-import { findPublishedMediaByRequestId } from "@/lib/instagram-media-index";
+import { findPublicationStatus, findPublishedMediaByRequestId } from "@/lib/instagram-media-index";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,10 +10,13 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid publication request ID." }, { status: 400 });
   }
   const published = await findPublishedMediaByRequestId(requestId);
+  const publication = published ? null : await findPublicationStatus(requestId);
   return Response.json(
     published
       ? { status: "published", mediaId: published.mediaId, permalink: published.permalink, parts: published.parts }
-      : { status: "processing" },
+      : publication?.status === "failed"
+        ? { status: "failed", error: publication.error || "Instagram publishing failed." }
+        : { status: "processing" },
     { headers: { "Cache-Control": "private, no-store, max-age=0" } }
   );
 }

@@ -361,6 +361,11 @@ export function InstagramPixelDbApp() {
         });
         result = await readJsonResponse(response);
         if (!response.ok) throw new Error(result.error || "Instagram publishing failed.");
+        if (result.status === "processing") {
+          const confirmed = await waitForPublishedRequest(requestId);
+          if (!confirmed) throw new Error("Instagram is still processing the post. Keep this window open and try again shortly.");
+          result = confirmed;
+        }
       } catch (error) {
         setPublishMessage("Confirming the Instagram post...");
         const confirmed = await waitForPublishedRequest(requestId);
@@ -584,7 +589,7 @@ export function InstagramPixelDbApp() {
 }
 
 async function waitForPublishedRequest(publishRequestId: string) {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     try {
       const response = await fetch("/api/instagram/status", {
         method: "POST",
@@ -595,8 +600,11 @@ async function waitForPublishedRequest(publishRequestId: string) {
       if (response.ok) {
         const result = await readJsonResponse(response);
         if (result.status === "published") return result;
+        if (result.status === "failed") throw new Error(result.error || "Instagram publishing failed.");
       }
-    } catch {}
+    } catch (error) {
+      if (error instanceof Error && error.message !== "Failed to fetch") throw error;
+    }
     await new Promise((resolve) => window.setTimeout(resolve, 2000));
   }
   return null;
@@ -615,7 +623,7 @@ async function readJsonResponse(response: Response) {
     parts?: number;
     uploadId?: string;
     uploadToken?: string;
-    status?: "processing" | "published";
+    status?: "processing" | "published" | "failed";
   }>;
 }
 

@@ -36,8 +36,8 @@ export async function POST(request: Request) {
         mediaBaseUrl: getMediaBaseUrl(request),
         publishRequestId
       });
-      console.log("[api/instagram/publish] success", { mediaId: result.mediaId, permalink: result.permalink, parts: result.parts });
-      return noStoreJson(result);
+      console.log("[api/instagram/publish] accepted", { requestId: result.requestId, parts: result.parts });
+      return noStoreJson(result, 202);
     }
     if (!contentType.includes("multipart/form-data")) {
       return Response.json({ error: "Expected a multipart upload." }, { status: 415 });

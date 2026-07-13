@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildInstagramCaption, type InstagramFileMetadata } from "@/instagram-caption";
 import { AUDIO_PROBE_SAMPLE_RATE, synthesizeDtmfProbePackets } from "@/audio-codec";
-import { findPublishedMediaByRequestId, recordPublishedMedia } from "@/lib/instagram-media-index";
+import { findPublishedMediaByRequestId, recordPublicationStatus, recordPublishedMedia } from "@/lib/instagram-media-index";
 
 const API_VERSION = "v24.0";
 const INSTAGRAM_ACCOUNT_ID = "28189490653969128";
@@ -167,7 +167,14 @@ export async function publishStagedInstagramVideos(input: {
     job.publishRequestId = input.publishRequestId;
     job.caption = buildInstagramCaption(input.metadata);
     await writeFile(join(directory, "job.json"), JSON.stringify(job));
-    return await publishStagedJob(job, input.mediaBaseUrl);
+    if (!job.publishRequestId) throw new Error("A publication request ID is required.");
+    await recordPublicationStatus(job.publishRequestId, "processing");
+    void publishStagedJob(job, input.mediaBaseUrl).catch(async (error) => {
+      const message = error instanceof Error ? error.message : "Instagram publishing failed.";
+      console.error("[instagram-publish] background failure", { jobId: job.id, requestId: job.publishRequestId, message });
+      await recordPublicationStatus(job.publishRequestId!, "failed", message);
+    });
+    return { status: "processing" as const, requestId: job.publishRequestId, parts: job.totalParts };
   } catch (error) {
     await rm(lockPath, { force: true });
     throw error;
@@ -240,8 +247,7 @@ async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
       }
     }
     console.log("[instagram-publish] starting", { jobId: job.id, requestId: job.publishRequestId, parts: job.files.length, displayCover: job.displayCover === true });
-    const childIds: string[] = [];
-    for (let index = 0; index < job.files.length; index += 1) {
+    const childIds = await Promise.all(job.files.map(async (fileName, index) => {
       const mediaUrl = `${mediaBaseUrl}/api/instagram/media/${job.id}/${encodeURIComponent(job.files[index])}?token=${job.mediaToken}`;
       const child = await graphPost(`/${INSTAGRAM_ACCOUNT_ID}/media`, {
         media_type: job.files.length === 1 ? "REELS" : "VIDEO",
@@ -253,8 +259,9 @@ async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
       if (!child.id) throw graphError(child, `Instagram rejected video ${index + 1}.`);
       console.log("[instagram-publish] child created", { jobId: job.id, requestId: job.publishRequestId, part: index + 1, containerId: child.id });
       await waitForContainer(child.id, accessToken, `video ${index + 1}`);
-      childIds.push(child.id);
-    }
+      console.log("[instagram-publish] child finished", { jobId: job.id, requestId: job.publishRequestId, part: index + 1, containerId: child.id });
+      return child.id;
+    }));
 
     let creationId = childIds[0];
     if (childIds.length > 1) {
