@@ -54,9 +54,9 @@ export async function publishInstagramVideos(input: {
           : { is_carousel_item: "true" })
       }, accessToken);
       if (!child.id) throw graphError(child, `Instagram rejected video ${index + 1}.`);
-      await waitForContainer(child.id, accessToken);
       childIds.push(child.id);
     }
+    await Promise.all(childIds.map((childId) => waitForContainer(childId, accessToken)));
 
     let creationId = childIds[0];
     if (childIds.length > 1) {

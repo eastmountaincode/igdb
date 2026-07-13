@@ -326,22 +326,32 @@ export function InstagramPixelDbApp() {
         uploadToken = uploadResult.uploadToken;
       }
       setPublishMessage("Publishing to @normal_shopkeep...");
-      const response = await fetch("/api/instagram/publish", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Accept": "application/json" },
-        body: JSON.stringify({
-          uploadId,
-          uploadToken,
-          originalName: selectedFile.name,
-          originalType: selectedFile.type || "application/octet-stream",
-          originalSize: selectedFile.size,
-          note: publishNote.trim(),
-          confirmation: "publish-to-normal-shopkeep",
-          publishRequestId: publishRequestId || crypto.randomUUID()
-        })
-      });
-      const result = await readJsonResponse(response);
-      if (!response.ok) throw new Error(result.error || "Instagram publishing failed.");
+      const requestId = publishRequestId || crypto.randomUUID();
+      const publishBody = {
+        uploadId,
+        uploadToken,
+        originalName: selectedFile.name,
+        originalType: selectedFile.type || "application/octet-stream",
+        originalSize: selectedFile.size,
+        note: publishNote.trim(),
+        confirmation: "publish-to-normal-shopkeep",
+        publishRequestId: requestId
+      };
+      let result: Awaited<ReturnType<typeof readJsonResponse>>;
+      try {
+        const response = await fetch("/api/instagram/publish", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: JSON.stringify(publishBody)
+        });
+        result = await readJsonResponse(response);
+        if (!response.ok) throw new Error(result.error || "Instagram publishing failed.");
+      } catch (error) {
+        setPublishMessage("Confirming the Instagram post...");
+        const confirmed = await waitForPublishedRequest(requestId);
+        if (!confirmed) throw error;
+        result = confirmed;
+      }
       if (result.permalink) setPublishedUrl(result.permalink);
       setPublishMessage(
         result.permalink
@@ -557,6 +567,25 @@ export function InstagramPixelDbApp() {
   );
 }
 
+async function waitForPublishedRequest(publishRequestId: string) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    try {
+      const response = await fetch("/api/instagram/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ publishRequestId }),
+        cache: "no-store"
+      });
+      if (response.ok) {
+        const result = await readJsonResponse(response);
+        if (result.status === "published") return result;
+      }
+    } catch {}
+    await new Promise((resolve) => window.setTimeout(resolve, 2000));
+  }
+  return null;
+}
+
 async function readJsonResponse(response: Response) {
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
@@ -570,6 +599,7 @@ async function readJsonResponse(response: Response) {
     parts?: number;
     uploadId?: string;
     uploadToken?: string;
+    status?: "processing" | "published";
   }>;
 }
 
