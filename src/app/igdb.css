@@ -217,6 +217,10 @@ dd {
   gap: 0.25rem;
 }
 
+.optional-gif {
+  margin-top: 0.65rem;
+}
+
 .encode-progress {
   display: grid;
   gap: 0.3rem;

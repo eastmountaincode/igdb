@@ -27,7 +27,8 @@ export async function POST(request: Request) {
       partIndex,
       totalParts,
       uploadId: String(form.get("uploadId") ?? "") || undefined,
-      uploadToken: String(form.get("uploadToken") ?? "") || undefined
+      uploadToken: String(form.get("uploadToken") ?? "") || undefined,
+      displayCover: form.get("displayCover") === "true"
     });
     return Response.json(result);
   } catch (error) {

@@ -13,13 +13,22 @@ import {
   type EncodedVideo
 } from "@/codec";
 import { buildInstagramCaption } from "@/instagram-caption";
-import { MAX_SOURCE_FILE_BYTES, MAX_SOURCE_FILE_LABEL, WRITE_SPEED_LABEL } from "@/upload-limits";
+import { encodeGifCoverVideo } from "@/cover-video";
+import {
+  MAX_SOURCE_FILE_BYTES,
+  MAX_SOURCE_FILE_LABEL,
+  MAX_SOURCE_FILE_WITH_COVER_BYTES,
+  MAX_SOURCE_FILE_WITH_COVER_LABEL,
+  WRITE_SPEED_LABEL
+} from "@/upload-limits";
 
 type ActiveTab = "read" | "write";
 
 export function InstagramPixelDbApp() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("write");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [coverGif, setCoverGif] = useState<File | null>(null);
+  const [coverVideo, setCoverVideo] = useState<Blob | null>(null);
   const [encodedVideos, setEncodedVideos] = useState<EncodedVideo[]>([]);
   const [decodedChunks, setDecodedChunks] = useState<DecodeResult[]>([]);
   const [decodeMessages, setDecodeMessages] = useState<string[]>([]);
@@ -35,7 +44,9 @@ export function InstagramPixelDbApp() {
   const [publishMessage, setPublishMessage] = useState("");
   const [publishedUrl, setPublishedUrl] = useState("");
   const captionPreviewRef = useRef<HTMLTextAreaElement>(null);
-  const fileTooLarge = Boolean(selectedFile && selectedFile.size > MAX_SOURCE_FILE_BYTES);
+  const activeFileLimit = coverGif ? MAX_SOURCE_FILE_WITH_COVER_BYTES : MAX_SOURCE_FILE_BYTES;
+  const activeFileLimitLabel = coverGif ? MAX_SOURCE_FILE_WITH_COVER_LABEL : MAX_SOURCE_FILE_LABEL;
+  const fileTooLarge = Boolean(selectedFile && selectedFile.size > activeFileLimit);
   const captionPreview = selectedFile
     ? buildInstagramCaption({
         name: selectedFile.name,
@@ -69,6 +80,18 @@ export function InstagramPixelDbApp() {
 
   function selectFile(file: File | null) {
     setSelectedFile(file);
+    setCoverVideo(null);
+    encodedVideos.forEach((video) => URL.revokeObjectURL(video.url));
+    setEncodedVideos([]);
+    setPublishMessage("");
+    setPublishedUrl("");
+  }
+
+  function handleCoverSelection(event: ChangeEvent<HTMLInputElement>) {
+    setCoverGif(event.target.files?.[0] ?? null);
+    setCoverVideo(null);
+    encodedVideos.forEach((video) => URL.revokeObjectURL(video.url));
+    setEncodedVideos([]);
     setPublishMessage("");
     setPublishedUrl("");
   }
@@ -99,9 +122,21 @@ export function InstagramPixelDbApp() {
     setEncodeProgress({ phase: "Starting", completed: 0, total: 1 });
     encodedVideos.forEach((video) => URL.revokeObjectURL(video.url));
     setEncodedVideos([]);
+    setCoverVideo(null);
     try {
       const videos = await encodeFileAsVideos(file, setEncodeProgress);
+      if (coverGif && videos.length >= 8) {
+        throw new Error("This file needs all eight carousel videos. Remove the display GIF or choose a file 25 MB or smaller.");
+      }
+      const nextCoverVideo = coverGif
+        ? await encodeGifCoverVideo(coverGif, {
+            name: file.name,
+            type: file.type || "application/octet-stream",
+            size: file.size
+          }, setEncodeProgress)
+        : null;
       setEncodedVideos(videos);
+      setCoverVideo(nextCoverVideo);
       setEncodeProgress({ phase: videos.length > 1 ? "MP4 set ready" : "MP4 ready", completed: videos.length, total: videos.length });
     } catch (error) {
       setDecodeMessages([`Video encode failed: ${error instanceof Error ? error.message : String(error)}`]);
@@ -214,24 +249,33 @@ export function InstagramPixelDbApp() {
   }
 
   async function handlePublishToInstagram() {
-    if (!selectedFile || !encodedVideos.length || isPublishing) return;
+    if (!selectedFile || !encodedVideos.length || (coverGif && !coverVideo) || isPublishing) return;
     setIsPublishing(true);
     setPublishMessage("Uploading to @normal_shopkeep...");
     setPublishedUrl("");
     try {
       const videos = [...encodedVideos].sort((left, right) => left.segmentIndex - right.segmentIndex);
+      const uploadParts = [
+        ...(coverVideo ? [{ blob: coverVideo, fileName: "igdb-display-cover.mp4", audioPayload: undefined as Blob | undefined }] : []),
+        ...videos.map((video) => ({
+          blob: video.blob,
+          fileName: generatedVideoFileName(selectedFile.name, video.segmentIndex, video.totalSegments),
+          audioPayload: video.audioPayload
+        }))
+      ];
       let uploadId = "";
       let uploadToken = "";
-      for (let index = 0; index < videos.length; index += 1) {
-        setPublishMessage(`Uploading video ${index + 1} of ${videos.length}...`);
-        const video = videos[index];
+      for (let index = 0; index < uploadParts.length; index += 1) {
+        setPublishMessage(`Uploading video ${index + 1} of ${uploadParts.length}...`);
+        const video = uploadParts[index];
         const form = new FormData();
-        form.set("video", video.blob, generatedVideoFileName(selectedFile.name, video.segmentIndex, video.totalSegments));
+        form.set("video", video.blob, video.fileName);
         if (video.audioPayload) {
-          form.set("audioPayload", video.audioPayload, `part-${video.segmentIndex + 1}.bin`);
+          form.set("audioPayload", video.audioPayload, `part-${index + 1}.bin`);
         }
         form.set("partIndex", String(index));
-        form.set("totalParts", String(videos.length));
+        form.set("totalParts", String(uploadParts.length));
+        if (index === 0 && coverVideo) form.set("displayCover", "true");
         if (uploadId) form.set("uploadId", uploadId);
         if (uploadToken) form.set("uploadToken", uploadToken);
         const uploadResponse = await fetch("/api/instagram/upload", { method: "POST", body: form });
@@ -259,7 +303,7 @@ export function InstagramPixelDbApp() {
       const result = await readJsonResponse(response);
       if (!response.ok || !result.permalink) throw new Error(result.error || "Instagram did not return a post URL.");
       setPublishedUrl(result.permalink);
-      setPublishMessage(`Published ${result.parts ?? encodedVideos.length} ${pluralize("video", result.parts ?? encodedVideos.length)}.`);
+      setPublishMessage(`Published ${result.parts ?? uploadParts.length} ${pluralize("video", result.parts ?? uploadParts.length)}.`);
     } catch (error) {
       setPublishMessage(error instanceof Error ? error.message : "Instagram publishing failed.");
     } finally {
@@ -345,7 +389,7 @@ export function InstagramPixelDbApp() {
         <section className="tab-panel write-layout">
           <fieldset className="panel write-source">
             <legend>write</legend>
-            <p className="file-limit">maximum file size: {MAX_SOURCE_FILE_LABEL}</p>
+            <p className="file-limit">maximum file size: {activeFileLimitLabel}</p>
             <p className="file-limit">write speed: {WRITE_SPEED_LABEL}</p>
             <label
               className={`dropzone${isFileDragActive ? " drag-active" : ""}`}
@@ -364,7 +408,12 @@ export function InstagramPixelDbApp() {
                 </strong>
               </label>
 
-            {fileTooLarge ? <p className="file-error" role="alert">file exceeds the {MAX_SOURCE_FILE_LABEL} maximum</p> : null}
+            <label className="field-label optional-gif" htmlFor="cover-gif-input">
+              display GIF (optional)
+              <input id="cover-gif-input" type="file" accept="image/gif,.gif" onChange={handleCoverSelection} />
+            </label>
+
+            {fileTooLarge ? <p className="file-error" role="alert">file exceeds the {activeFileLimitLabel} maximum</p> : null}
 
             <div className="button-row">
               <button
@@ -408,7 +457,7 @@ export function InstagramPixelDbApp() {
               <div className="button-row">
                 <button
                   type="button"
-                  disabled={!selectedFile || fileTooLarge || !encodedVideos.length || isPublishing}
+                  disabled={!selectedFile || fileTooLarge || !encodedVideos.length || (Boolean(coverGif) && !coverVideo) || isPublishing}
                   onClick={handlePublishToInstagram}
                 >
                   {isPublishing ? "publishing..." : "publish to Instagram"}

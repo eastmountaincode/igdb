@@ -44,3 +44,4 @@ pnpm-debug.log*
 .instagram-browser-profile/
 .instagram-evidence/
 .instagram-uploads/
+.instagram-media-index.json

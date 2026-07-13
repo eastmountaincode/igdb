@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildInstagramCaption, type InstagramFileMetadata } from "@/instagram-caption";
 import { AUDIO_PROBE_SAMPLE_RATE, synthesizeDtmfProbePackets } from "@/audio-codec";
+import { recordPublishedMedia } from "@/lib/instagram-media-index";
 
 const API_VERSION = "v24.0";
 const INSTAGRAM_ACCOUNT_ID = "28189490653969128";
@@ -18,6 +19,7 @@ type StagedJob = {
   caption: string;
   files: string[];
   totalParts: number;
+  displayCover?: boolean;
   createdAt: string;
 };
 
@@ -73,6 +75,7 @@ export async function publishInstagramVideos(input: {
     const media = await graphGet(`/${published.id}`, {
       fields: "id,permalink,media_type,media_product_type,username"
     }, accessToken);
+    await recordPublishedMedia(published.id, false);
     return {
       mediaId: published.id,
       permalink: media.permalink,
@@ -92,6 +95,7 @@ export async function stageInstagramVideoPart(input: {
   totalParts: number;
   uploadId?: string;
   uploadToken?: string;
+  displayCover?: boolean;
 }) {
   const id = input.uploadId ? safeSegment(input.uploadId) : randomUUID();
   const directory = join(JOB_ROOT, id);
@@ -108,6 +112,7 @@ export async function stageInstagramVideoPart(input: {
       caption: "",
       files: [],
       totalParts: input.totalParts,
+      displayCover: input.displayCover === true,
       createdAt: new Date().toISOString()
     };
   }
@@ -242,6 +247,7 @@ async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
     const media = await graphGet(`/${published.id}`, {
       fields: "id,permalink,media_type,media_product_type,username"
     }, accessToken);
+    await recordPublishedMedia(published.id, job.displayCover === true);
     return {
       mediaId: published.id,
       permalink: media.permalink,

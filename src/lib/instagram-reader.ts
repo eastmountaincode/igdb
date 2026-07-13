@@ -1,3 +1,5 @@
+import { publishedMediaHasCover } from "@/lib/instagram-media-index";
+
 const GRAPH_VERSION = "v23.0";
 const GRAPH_BASE_URL = `https://graph.instagram.com/${GRAPH_VERSION}`;
 const MAX_MEDIA_PAGES = 10;
@@ -40,11 +42,12 @@ export async function resolveInstagramReadSource(input: string): Promise<Instagr
       }), { cache: "no-store" });
       if (!mediaResponse.ok) throw new Error("Instagram could not load that post.");
       const media = await mediaResponse.json() as InstagramMedia;
-      const videoUrls = media.media_type === "CAROUSEL_ALBUM"
+      let videoUrls = media.media_type === "CAROUSEL_ALBUM"
         ? (media.children?.data ?? []).filter((item) => item.media_type === "VIDEO" && item.media_url).map((item) => item.media_url as string)
         : media.media_type === "VIDEO" && media.media_url
           ? [media.media_url]
           : [];
+      if (await publishedMediaHasCover(media.id)) videoUrls = videoUrls.slice(1);
       if (!videoUrls.length) throw new Error("That Instagram post does not contain a readable video.");
       if (videoUrls.length > 8) throw new Error("That Instagram post contains too many videos.");
       return { id: media.id, permalink, videoUrls };
