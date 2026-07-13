@@ -462,7 +462,7 @@ export function InstagramPixelDbApp() {
           <fieldset className="panel write-output">
             <legend>publish to @normal_shopkeep</legend>
               <div className="field-label">
-                <span>display video preview</span>
+                <span>carousel cover preview (item 1)</span>
                 {coverVideoUrl ? (
                   <video
                     className="display-video"

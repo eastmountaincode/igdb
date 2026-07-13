@@ -284,7 +284,7 @@ dt {
 
 .display-video {
   display: block;
-  width: min(100%, 18rem);
+  width: min(100%, 14rem);
   aspect-ratio: 1;
   border: 0;
   object-fit: contain;
