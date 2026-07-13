@@ -5,20 +5,25 @@ import { formatCaptionBytes, type InstagramFileMetadata } from "@/instagram-capt
 const COVER_DURATION_SECONDS = 8;
 const COVER_FPS = 15;
 
-export async function encodeGifCoverVideo(
-  gifFile: File | null,
+export async function encodeCoverVideo(
+  coverFile: File | null,
   metadata: InstagramFileMetadata,
   onProgress?: (progress: EncodeVideoProgress) => void
 ) {
   await document.fonts.load('38px "Redaction 35"');
-  if (gifFile && !gifFile.type.includes("gif") && !gifFile.name.toLowerCase().endsWith(".gif")) {
-    throw new Error("The cover must be a GIF.");
+  if (coverFile && !coverFile.type.startsWith("image/")) {
+    throw new Error("The cover must be an image or GIF.");
   }
-  onProgress?.({ phase: gifFile ? "Reading GIF" : "Preparing display", completed: 0, total: 1 });
-  const parsedGif = gifFile ? parseGIF(await gifFile.arrayBuffer()) : null;
+  onProgress?.({ phase: coverFile ? "Reading cover" : "Preparing display", completed: 0, total: 1 });
+  const isGif = Boolean(coverFile && (coverFile.type.includes("gif") || coverFile.name.toLowerCase().endsWith(".gif")));
+  const parsedGif = isGif && coverFile ? parseGIF(await coverFile.arrayBuffer()) : null;
   const frames = parsedGif ? decompressFrames(parsedGif, true) : [];
-  if (gifFile && !frames.length) throw new Error("The GIF contains no readable frames.");
-  const composedFrames = parsedGif ? composeGifFrames(frames, parsedGif.lsd.width, parsedGif.lsd.height) : [blankFrame()];
+  if (isGif && !frames.length) throw new Error("The GIF contains no readable frames.");
+  const composedFrames = parsedGif
+    ? composeGifFrames(frames, parsedGif.lsd.width, parsedGif.lsd.height)
+    : coverFile
+      ? [await loadImageFrame(coverFile)]
+      : [blankFrame()];
   const durations = frames.length ? frames.map((frame) => Math.max(20, frame.delay || 100)) : [1000];
   const cycleDuration = durations.reduce((sum, duration) => sum + duration, 0);
 
@@ -29,7 +34,7 @@ export async function encodeGifCoverVideo(
     height: CANVAS_SIZE,
     bitrate: VIDEO_BITRATE
   });
-  if (!codec) throw new Error("This browser cannot encode the GIF cover as H.264 video.");
+  if (!codec) throw new Error("This browser cannot encode the cover as H.264 video.");
   const constantBitrate = await canEncodeVideo(codec, {
     width: CANVAS_SIZE,
     height: CANVAS_SIZE,
@@ -54,19 +59,29 @@ export async function encodeGifCoverVideo(
 
   const totalFrames = COVER_DURATION_SECONDS * COVER_FPS;
   const frameDuration = 1 / COVER_FPS;
-  onProgress?.({ phase: "Encoding GIF cover", completed: 0, total: totalFrames });
+  onProgress?.({ phase: "Encoding cover", completed: 0, total: totalFrames });
   for (let outputIndex = 0; outputIndex < totalFrames; outputIndex += 1) {
     const elapsedMs = ((outputIndex / COVER_FPS) * 1000) % cycleDuration;
-    drawCoverFrame(context, composedFrames[frameIndexAtTime(durations, elapsedMs)], metadata, Boolean(gifFile));
+    drawCoverFrame(context, composedFrames[frameIndexAtTime(durations, elapsedMs)], metadata, Boolean(coverFile));
     await source.add(outputIndex * frameDuration, frameDuration, { keyFrame: outputIndex % COVER_FPS === 0 });
-    onProgress?.({ phase: "Encoding GIF cover", completed: outputIndex + 1, total: totalFrames });
+    onProgress?.({ phase: "Encoding cover", completed: outputIndex + 1, total: totalFrames });
     if (outputIndex % 8 === 7) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
   source.close();
-  onProgress?.({ phase: "Finalizing GIF cover", completed: totalFrames, total: totalFrames });
+  onProgress?.({ phase: "Finalizing cover", completed: totalFrames, total: totalFrames });
   await output.finalize();
-  if (!target.buffer) throw new Error("GIF cover encoder did not produce a file.");
+  if (!target.buffer) throw new Error("Cover encoder did not produce a file.");
   return new Blob([target.buffer], { type: "video/mp4" });
+}
+
+async function loadImageFrame(file: File) {
+  const bitmap = await createImageBitmap(file);
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  requiredContext(canvas).drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return canvas;
 }
 
 function composeGifFrames(frames: ParsedFrame[], width: number, height: number) {

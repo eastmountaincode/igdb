@@ -13,7 +13,7 @@ import {
   type EncodedVideo
 } from "@/codec";
 import { buildInstagramCaption } from "@/instagram-caption";
-import { encodeGifCoverVideo } from "@/cover-video";
+import { encodeCoverVideo } from "@/cover-video";
 import {
   MAX_SOURCE_FILE_WITH_COVER_BYTES,
   MAX_SOURCE_FILE_WITH_COVER_LABEL,
@@ -25,7 +25,7 @@ type ActiveTab = "read" | "write";
 export function InstagramPixelDbApp() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("write");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [coverGif, setCoverGif] = useState<File | null>(null);
+  const [coverMedia, setCoverMedia] = useState<File | null>(null);
   const [coverVideo, setCoverVideo] = useState<Blob | null>(null);
   const [coverVideoUrl, setCoverVideoUrl] = useState("");
   const [isEncodingDisplayVideo, setIsEncodingDisplayVideo] = useState(false);
@@ -83,7 +83,7 @@ export function InstagramPixelDbApp() {
     }
     setCoverVideo(null);
     setIsEncodingDisplayVideo(true);
-    void encodeGifCoverVideo(coverGif, {
+    void encodeCoverVideo(coverMedia, {
       name: selectedFile.name,
       type: selectedFile.type || "application/octet-stream",
       size: selectedFile.size
@@ -97,7 +97,7 @@ export function InstagramPixelDbApp() {
     return () => {
       cancelled = true;
     };
-  }, [selectedFile, coverGif]);
+  }, [selectedFile, coverMedia]);
 
   const recoveredChunks = decodedChunks.filter((chunk) => chunk.ok && chunk.kind === "data").length;
   const expectedChunks = decodedChunks[0]?.totalChunks ?? 0;
@@ -125,7 +125,7 @@ export function InstagramPixelDbApp() {
   }
 
   function handleCoverSelection(event: ChangeEvent<HTMLInputElement>) {
-    setCoverGif(event.target.files?.[0] ?? null);
+    setCoverMedia(event.target.files?.[0] ?? null);
     setCoverVideo(null);
     encodedVideos.forEach((video) => URL.revokeObjectURL(video.url));
     setEncodedVideos([]);
@@ -479,12 +479,12 @@ export function InstagramPixelDbApp() {
                   </div>
                 )}
               </div>
-              <label className="field-label" htmlFor="cover-gif-input">
-                display GIF (optional)
+              <label className="field-label" htmlFor="cover-media-input">
+                GIF/image (optional)
                 <span className="dropzone compact-picker">
-                  <input id="cover-gif-input" type="file" accept="image/gif,.gif" onChange={handleCoverSelection} />
+                  <input id="cover-media-input" type="file" accept="image/*" onChange={handleCoverSelection} />
                   <span>choose file</span>
-                  <strong>{coverGif?.name ?? "no file selected"}</strong>
+                  <strong>{coverMedia?.name ?? "no file selected"}</strong>
                 </span>
               </label>
               <label className="field-label" htmlFor="instagram-note">
