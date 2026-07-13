@@ -16,7 +16,7 @@ export async function POST(request: Request) {
       if (body.confirmation !== "publish-to-normal-shopkeep") {
         return Response.json({ error: "Publishing confirmation is required." }, { status: 400 });
       }
-      const originalName = requiredValue(body.originalName, "originalName", 255);
+      const originalName = requiredValue(body.originalName, "originalName", 1024);
       const originalType = requiredValue(body.originalType, "originalType", 255);
       const originalSize = Number(body.originalSize);
       const note = String(body.note ?? "").trim();
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
       }
     }
 
-    const originalName = requiredText(form, "originalName", 255);
+    const originalName = requiredText(form, "originalName", 1024);
     const originalType = requiredText(form, "originalType", 255);
     const originalSize = Number(form.get("originalSize"));
     enforceRateLimit(request, `${originalName}:${originalSize}`);

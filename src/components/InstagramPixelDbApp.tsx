@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import {
   decodeVideoFile,
   downloadBlob,
@@ -24,6 +24,8 @@ type ActiveTab = "about" | "read" | "write";
 export function InstagramPixelDbApp() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("write");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [fileSelectionMessage, setFileSelectionMessage] = useState("");
+  const filePickerPendingRef = useRef(false);
   const [coverMedia, setCoverMedia] = useState<File | null>(null);
   const [coverVideo, setCoverVideo] = useState<Blob | null>(null);
   const [coverVideoUrl, setCoverVideoUrl] = useState("");
@@ -67,6 +69,40 @@ export function InstagramPixelDbApp() {
   }, [coverVideo]);
 
   useEffect(() => {
+    const input = document.getElementById("file-input") as HTMLInputElement | null;
+
+    function handlePickerCancel() {
+      if (!filePickerPendingRef.current) return;
+      filePickerPendingRef.current = false;
+      if (input?.files?.length) return;
+      setFileSelectionMessage(
+        "No file was selected. If you chose a file, its filename may be too long for Zo to transfer. Shorten the filename and try again."
+      );
+    }
+
+    function handleWindowFocus() {
+      if (!filePickerPendingRef.current) return;
+      window.setTimeout(() => {
+        if (!filePickerPendingRef.current) return;
+        const input = document.getElementById("file-input") as HTMLInputElement | null;
+        if (!input?.files?.length) {
+          filePickerPendingRef.current = false;
+          setFileSelectionMessage(
+            "No file was selected. If you chose a file, its filename may be too long for Zo to transfer. Shorten the filename and try again."
+          );
+        }
+      }, 300);
+    }
+
+    input?.addEventListener("cancel", handlePickerCancel);
+    window.addEventListener("focus", handleWindowFocus);
+    return () => {
+      input?.removeEventListener("cancel", handlePickerCancel);
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     if (!selectedFile) {
       setCoverVideo(null);
@@ -103,7 +139,21 @@ export function InstagramPixelDbApp() {
   }
 
   function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
-    selectFile(event.target.files?.[0] ?? null);
+    filePickerPendingRef.current = false;
+    const file = event.target.files?.[0] ?? null;
+    if (!file) {
+      setFileSelectionMessage(
+        "No file was selected. If you chose a file, its filename may be too long for Zo to transfer. Shorten the filename and try again."
+      );
+      return;
+    }
+    setFileSelectionMessage("");
+    selectFile(file);
+  }
+
+  function handleFilePickerOpen() {
+    filePickerPendingRef.current = true;
+    setFileSelectionMessage("");
   }
 
   function selectFile(file: File | null) {
@@ -456,7 +506,12 @@ export function InstagramPixelDbApp() {
               onDragLeave={handleFileDragLeave}
               onDrop={handleFileDrop}
             >
-              <input id="file-input" type="file" onChange={handleFileSelection} />
+              <input
+                id="file-input"
+                type="file"
+                onClick={handleFilePickerOpen}
+                onChange={handleFileSelection}
+              />
               <span className="file-picker-action">
                 <span className="file-picker-button">choose file</span>
                 {nextWriteStep === "choose-file" ? <span className="next-step-arrow" aria-hidden="true">←</span> : null}
@@ -469,6 +524,7 @@ export function InstagramPixelDbApp() {
               </label>
 
             {fileTooLarge ? <p className="file-error" role="alert">file exceeds the {activeFileLimitLabel} maximum</p> : null}
+            {fileSelectionMessage ? <p className="file-error" role="alert">{fileSelectionMessage}</p> : null}
 
             <div className="button-row">
               <button
