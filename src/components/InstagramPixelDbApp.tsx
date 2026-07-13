@@ -332,7 +332,7 @@ export function InstagramPixelDbApp() {
   return (
     <div className="shell">
       <header className="site-header">
-        <span className="site-title">IGDB</span>
+        <span className="site-title">Normal Shopkeep</span>
         <nav className="tabbar" aria-label="pages">
           <button
             type="button"

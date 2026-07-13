@@ -6,7 +6,7 @@ import { join } from "node:path";
 const styles = readFileSync(join(process.cwd(), "src/app/igdb.css"), "utf8");
 
 export const metadata: Metadata = {
-  title: "IGDB",
+  title: "Normal Shopkeep",
   description: "File transport through Instagram video frames."
 };
 

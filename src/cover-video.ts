@@ -161,12 +161,12 @@ function drawCoverFrame(context: CanvasRenderingContext2D, gifFrame: HTMLCanvasE
 
   const legendFont = `28px "Redaction 35", "Times New Roman", Times, serif`;
   context.font = legendFont;
-  const legendWidth = context.measureText("IGDB").width;
+  const legendWidth = context.measureText("Normal Shopkeep").width;
   context.fillStyle = "#fff";
   context.fillRect(60, 34, legendWidth + 20, 36);
   context.fillStyle = "#000";
   context.textBaseline = "top";
-  context.fillText("IGDB", 70, 34);
+  context.fillText("Normal Shopkeep", 70, 34);
 }
 
 function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
