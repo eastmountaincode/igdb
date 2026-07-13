@@ -111,11 +111,13 @@ function composeGifFrames(frames: ParsedFrame[], width: number, height: number) 
 }
 
 function drawCoverFrame(context: CanvasRenderingContext2D, gifFrame: HTMLCanvasElement, metadata: InstagramFileMetadata, hasGif: boolean) {
-  context.fillStyle = "#000";
+  context.fillStyle = "#fff";
   context.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 
-  const margin = 80;
-  const contentWidth = CANVAS_SIZE - margin * 2;
+  const horizontalMargin = 80;
+  const contentTop = 96;
+  const contentBottom = 640;
+  const contentWidth = CANVAS_SIZE - horizontalMargin * 2;
   const fontSize = 38;
   const lineHeight = 48;
   const sectionGap = 14;
@@ -127,11 +129,15 @@ function drawCoverFrame(context: CanvasRenderingContext2D, gifFrame: HTMLCanvasE
     wrapText(context, formatCaptionBytes(metadata.size), contentWidth)
   ];
   const textHeight = sections.reduce((total, lines) => total + lines.length * lineHeight, 0) + sectionGap * (sections.length - 1);
-  const contentHeight = CANVAS_SIZE - margin * 2;
+  const contentHeight = contentBottom - contentTop;
   const mediaGap = hasGif ? 36 : 0;
   const gifHeight = hasGif ? Math.max(0, Math.min(300, contentHeight - textHeight - mediaGap)) : 0;
   const combinedHeight = gifHeight + mediaGap + textHeight;
-  let cursorY = margin + Math.max(0, (contentHeight - combinedHeight) / 2);
+  let cursorY = contentTop + Math.max(0, (contentHeight - combinedHeight) / 2);
+
+  context.strokeStyle = "#000";
+  context.lineWidth = 2;
+  context.strokeRect(40, 52, CANVAS_SIZE - 80, CANVAS_SIZE - 92);
 
   if (hasGif) {
     const scale = Math.min(contentWidth / gifFrame.width, gifHeight / gifFrame.height);
@@ -142,24 +148,25 @@ function drawCoverFrame(context: CanvasRenderingContext2D, gifFrame: HTMLCanvasE
     cursorY += gifHeight + mediaGap;
   }
 
-  context.fillStyle = "#fff";
+  context.fillStyle = "#000";
   context.textBaseline = "top";
   context.font = font;
   sections.forEach((lines, sectionIndex) => {
     lines.forEach((line) => {
-      context.fillText(line, margin, cursorY);
+      context.fillText(line, horizontalMargin, cursorY);
       cursorY += lineHeight;
     });
     if (sectionIndex < sections.length - 1) cursorY += sectionGap;
   });
 
-  context.save();
+  const legendFont = `28px "Redaction 35", "Times New Roman", Times, serif`;
+  context.font = legendFont;
+  const legendWidth = context.measureText("IGDB").width;
   context.fillStyle = "#fff";
-  context.font = `28px "Redaction 35", "Times New Roman", Times, serif`;
-  context.textAlign = "right";
-  context.textBaseline = "bottom";
-  context.fillText("IGDB", CANVAS_SIZE - 40, CANVAS_SIZE - 36);
-  context.restore();
+  context.fillRect(60, 34, legendWidth + 20, 36);
+  context.fillStyle = "#000";
+  context.textBaseline = "top";
+  context.fillText("IGDB", 70, 34);
 }
 
 function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
