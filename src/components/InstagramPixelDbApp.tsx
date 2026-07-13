@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import {
   decodeVideoFile,
   downloadBlob,
@@ -12,7 +12,6 @@ import {
   type EncodeVideoProgress,
   type EncodedVideo
 } from "@/codec";
-import { buildInstagramCaption } from "@/instagram-caption";
 import { encodeCoverVideo } from "@/cover-video";
 import {
   MAX_SOURCE_FILE_WITH_COVER_BYTES,
@@ -44,25 +43,9 @@ export function InstagramPixelDbApp() {
   const [publishMessage, setPublishMessage] = useState("");
   const [publishedUrl, setPublishedUrl] = useState("");
   const [publishRequestId, setPublishRequestId] = useState("");
-  const captionPreviewRef = useRef<HTMLTextAreaElement>(null);
   const activeFileLimit = MAX_SOURCE_FILE_WITH_COVER_BYTES;
   const activeFileLimitLabel = MAX_SOURCE_FILE_WITH_COVER_LABEL;
   const fileTooLarge = Boolean(selectedFile && selectedFile.size > activeFileLimit);
-  const captionPreview = selectedFile
-    ? buildInstagramCaption({
-        name: selectedFile.name,
-        type: selectedFile.type || "application/octet-stream",
-        size: selectedFile.size,
-        note: publishNote
-      })
-    : "";
-
-  useLayoutEffect(() => {
-    const textarea = captionPreviewRef.current;
-    if (!textarea) return;
-    textarea.style.height = "auto";
-    textarea.style.height = `${textarea.scrollHeight + 2}px`;
-  }, [captionPreview]);
 
   useEffect(() => {
     if (!coverVideo) {
@@ -488,25 +471,13 @@ export function InstagramPixelDbApp() {
                 </span>
               </label>
               <label className="field-label" htmlFor="instagram-note">
-                optional note
+                caption note (optional)
                 <textarea
                   id="instagram-note"
                   value={publishNote}
                   maxLength={1000}
                   onChange={(event) => setPublishNote(event.target.value)}
                   placeholder="add context"
-                />
-              </label>
-
-              <label className="field-label" htmlFor="instagram-caption-preview">
-                caption
-                <textarea
-                  ref={captionPreviewRef}
-                  id="instagram-caption-preview"
-                  className="caption-preview"
-                  readOnly
-                  value={captionPreview}
-                  placeholder="choose a file"
                 />
               </label>
 
