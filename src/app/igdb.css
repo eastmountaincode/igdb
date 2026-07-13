@@ -1,3 +1,11 @@
+@font-face {
+  font-family: "Los Angeles";
+  src: url("/fonts/LosAngeles.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
 :root {
   color: #111;
   background: #fff;

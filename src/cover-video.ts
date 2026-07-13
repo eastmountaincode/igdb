@@ -10,6 +10,7 @@ export async function encodeGifCoverVideo(
   metadata: InstagramFileMetadata,
   onProgress?: (progress: EncodeVideoProgress) => void
 ) {
+  await document.fonts.load('38px "Los Angeles"');
   if (gifFile && !gifFile.type.includes("gif") && !gifFile.name.toLowerCase().endsWith(".gif")) {
     throw new Error("The cover must be a GIF.");
   }
