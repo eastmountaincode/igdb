@@ -37,7 +37,7 @@ The API branch publishes only to `@normal_shopkeep`. It reads `INSTAGRAM_ACCESS_
 
 The Read page accepts an Instagram post or Reel URL from `@normal_shopkeep`. Zo resolves and proxies its ordered video parts through the authorized Instagram API, the existing browser decoder reconstructs and SHA-256 verifies the source, and the recovered file downloads directly. Never expose Instagram CDN URLs or the account token to the browser.
 
-Write optionally accepts an animated GIF from the visitor's computer. It becomes an eight-second 720px H.264 display cover containing the source filename, MIME type, and size, and is uploaded as carousel item 1 before the encoded data videos. With a cover, the source limit is 25 MB so seven data videos plus one cover stay within Instagram's eight-item limit; without a cover it remains 28 MB. Published media IDs and their cover flag are recorded in the runtime-only `.instagram-media-index.json`, allowing Read to omit the cover before decoding.
+Every Write creates an eight-second, 720×720 H.264 **display video** containing the source filename, MIME type, and size. It is always carousel item 1 before the encoded data videos. An optional animated GIF may appear inside its padded safe area. The UI previews the actual generated MP4, not a responsive HTML imitation. The source limit is 25 MB so seven data videos plus the display video stay within Instagram's eight-item limit. Published media IDs and their display-video flag are recorded in the runtime-only `.instagram-media-index.json`, allowing Read to omit item 1 before decoding.
 
 The published service sources `/root/.zo_secrets` at startup so the Instagram token remains outside the repository. Keep `INSTAGRAM_MEDIA_BASE_URL` pointed at the public Zo Site URL.
 

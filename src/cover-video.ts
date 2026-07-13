@@ -98,14 +98,14 @@ function composeGifFrames(frames: ParsedFrame[], width: number, height: number) 
 function drawCoverFrame(context: CanvasRenderingContext2D, gifFrame: HTMLCanvasElement, metadata: InstagramFileMetadata, hasGif: boolean) {
   context.fillStyle = "#000";
   context.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-  const maxWidth = 608;
-  const maxHeight = 450;
+  const maxWidth = 520;
+  const maxHeight = 340;
   if (hasGif) {
     const scale = Math.min(maxWidth / gifFrame.width, maxHeight / gifFrame.height);
     const width = Math.max(1, Math.round(gifFrame.width * scale));
     const height = Math.max(1, Math.round(gifFrame.height * scale));
     context.imageSmoothingEnabled = false;
-    context.drawImage(gifFrame, Math.round((CANVAS_SIZE - width) / 2), 34 + Math.round((maxHeight - height) / 2), width, height);
+    context.drawImage(gifFrame, Math.round((CANVAS_SIZE - width) / 2), 70 + Math.round((maxHeight - height) / 2), width, height);
   }
 
   context.fillStyle = "#fff";
@@ -116,8 +116,8 @@ function drawCoverFrame(context: CanvasRenderingContext2D, gifFrame: HTMLCanvasE
     `File size: ${formatCaptionBytes(metadata.size)}`
   ];
   lines.forEach((line, index) => {
-    context.font = fitFont(context, line, 608, hasGif ? 30 : 38);
-    context.fillText(line, 56, (hasGif ? 520 : 270) + index * (hasGif ? 48 : 64));
+    context.font = fitFont(context, line, 560, hasGif ? 30 : 38);
+    context.fillText(line, 80, (hasGif ? 470 : 270) + index * (hasGif ? 48 : 64));
   });
 }
 

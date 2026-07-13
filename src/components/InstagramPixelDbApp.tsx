@@ -26,8 +26,8 @@ export function InstagramPixelDbApp() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("write");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [coverGif, setCoverGif] = useState<File | null>(null);
-  const [coverGifUrl, setCoverGifUrl] = useState("");
   const [coverVideo, setCoverVideo] = useState<Blob | null>(null);
+  const [coverVideoUrl, setCoverVideoUrl] = useState("");
   const [encodedVideos, setEncodedVideos] = useState<EncodedVideo[]>([]);
   const [decodedChunks, setDecodedChunks] = useState<DecodeResult[]>([]);
   const [decodeMessages, setDecodeMessages] = useState<string[]>([]);
@@ -64,14 +64,14 @@ export function InstagramPixelDbApp() {
   }, [captionPreview]);
 
   useEffect(() => {
-    if (!coverGif) {
-      setCoverGifUrl("");
+    if (!coverVideo) {
+      setCoverVideoUrl("");
       return;
     }
-    const url = URL.createObjectURL(coverGif);
-    setCoverGifUrl(url);
+    const url = URL.createObjectURL(coverVideo);
+    setCoverVideoUrl(url);
     return () => URL.revokeObjectURL(url);
-  }, [coverGif]);
+  }, [coverVideo]);
 
   const recoveredChunks = decodedChunks.filter((chunk) => chunk.ok && chunk.kind === "data").length;
   const expectedChunks = decodedChunks[0]?.totalChunks ?? 0;
@@ -442,14 +442,22 @@ export function InstagramPixelDbApp() {
 
           <fieldset className="panel write-output">
             <legend>publish to @normal_shopkeep</legend>
-              <figure className="display-preview" aria-label="Instagram display video preview">
-                {coverGifUrl ? <img src={coverGifUrl} alt="" /> : null}
-                <figcaption className={coverGif ? "has-gif" : ""}>
-                  <span>File name: {selectedFile?.name ?? "—"}</span>
-                  <span>File type: {selectedFile?.type || (selectedFile ? "application/octet-stream" : "—")}</span>
-                  <span>File size: {selectedFile ? formatBytes(selectedFile.size) : "—"}</span>
-                </figcaption>
-              </figure>
+              <div className="field-label">
+                <span>display video</span>
+                {coverVideoUrl ? (
+                  <video
+                    className="display-video"
+                    src={coverVideoUrl}
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                    aria-label="Generated Instagram display video"
+                  />
+                ) : (
+                  <div className="display-video display-video-placeholder" aria-label="Display video not generated" />
+                )}
+              </div>
               <label className="field-label" htmlFor="cover-gif-input">
                 display GIF (optional)
                 <span className="dropzone compact-picker">

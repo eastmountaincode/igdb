@@ -282,39 +282,18 @@ dt {
   gap: 0.65rem;
 }
 
-.display-preview {
-  position: relative;
-  display: grid;
+.display-video {
+  display: block;
+  width: min(100%, 24rem);
   aspect-ratio: 1;
-  overflow: hidden;
-  background: #000;
-  color: #fff;
-  font-family: "Los Angeles", "Times New Roman", Times, serif;
-}
-
-.display-preview img {
-  width: calc(100% - 16%);
-  height: 62.5%;
-  margin: 4.7% 8% 0;
+  border: 0;
   object-fit: contain;
-  image-rendering: pixelated;
+  background: #000;
 }
 
-.display-preview figcaption {
-  display: grid;
-  align-content: center;
-  gap: 4.5%;
-  padding: 8%;
-  font-size: clamp(1rem, 3.1vw, 1.8rem);
-  overflow-wrap: anywhere;
-}
-
-.display-preview figcaption.has-gif {
-  position: absolute;
-  inset: 72% 0 0;
-  align-content: start;
-  padding-top: 0;
-  font-size: clamp(0.85rem, 2vw, 1.25rem);
+.display-video-placeholder {
+  aspect-ratio: 1;
+  background: #000;
 }
 
 .compact-picker {
