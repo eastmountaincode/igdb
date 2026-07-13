@@ -241,9 +241,12 @@ table {
 }
 
 .file-picker-action input[type="file"] {
-  flex: 0 1 auto;
-  width: auto;
-  max-width: 100%;
+  flex: 0 0 7rem;
+  width: 7rem;
+  max-width: 7rem;
+  overflow: hidden;
+  color: transparent;
+  white-space: nowrap;
 }
 
 .next-step-arrow {
