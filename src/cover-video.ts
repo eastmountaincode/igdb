@@ -6,19 +6,19 @@ const COVER_DURATION_SECONDS = 8;
 const COVER_FPS = 15;
 
 export async function encodeGifCoverVideo(
-  gifFile: File,
+  gifFile: File | null,
   metadata: InstagramFileMetadata,
   onProgress?: (progress: EncodeVideoProgress) => void
 ) {
-  if (!gifFile.type.includes("gif") && !gifFile.name.toLowerCase().endsWith(".gif")) {
+  if (gifFile && !gifFile.type.includes("gif") && !gifFile.name.toLowerCase().endsWith(".gif")) {
     throw new Error("The cover must be a GIF.");
   }
-  onProgress?.({ phase: "Reading GIF", completed: 0, total: 1 });
-  const parsedGif = parseGIF(await gifFile.arrayBuffer());
-  const frames = decompressFrames(parsedGif, true);
-  if (!frames.length) throw new Error("The GIF contains no readable frames.");
-  const composedFrames = composeGifFrames(frames, parsedGif.lsd.width, parsedGif.lsd.height);
-  const durations = frames.map((frame) => Math.max(20, frame.delay || 100));
+  onProgress?.({ phase: gifFile ? "Reading GIF" : "Preparing display", completed: 0, total: 1 });
+  const parsedGif = gifFile ? parseGIF(await gifFile.arrayBuffer()) : null;
+  const frames = parsedGif ? decompressFrames(parsedGif, true) : [];
+  if (gifFile && !frames.length) throw new Error("The GIF contains no readable frames.");
+  const composedFrames = parsedGif ? composeGifFrames(frames, parsedGif.lsd.width, parsedGif.lsd.height) : [blankFrame()];
+  const durations = frames.length ? frames.map((frame) => Math.max(20, frame.delay || 100)) : [1000];
   const cycleDuration = durations.reduce((sum, duration) => sum + duration, 0);
 
   const { BufferTarget, CanvasSource, Mp4OutputFormat, Output, canEncodeVideo, getFirstEncodableVideoCodec } = await import("mediabunny");
@@ -56,7 +56,7 @@ export async function encodeGifCoverVideo(
   onProgress?.({ phase: "Encoding GIF cover", completed: 0, total: totalFrames });
   for (let outputIndex = 0; outputIndex < totalFrames; outputIndex += 1) {
     const elapsedMs = ((outputIndex / COVER_FPS) * 1000) % cycleDuration;
-    drawCoverFrame(context, composedFrames[frameIndexAtTime(durations, elapsedMs)], metadata);
+    drawCoverFrame(context, composedFrames[frameIndexAtTime(durations, elapsedMs)], metadata, Boolean(gifFile));
     await source.add(outputIndex * frameDuration, frameDuration, { keyFrame: outputIndex % COVER_FPS === 0 });
     onProgress?.({ phase: "Encoding GIF cover", completed: outputIndex + 1, total: totalFrames });
     if (outputIndex % 8 === 7) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -94,16 +94,18 @@ function composeGifFrames(frames: ParsedFrame[], width: number, height: number) 
   return composed;
 }
 
-function drawCoverFrame(context: CanvasRenderingContext2D, gifFrame: HTMLCanvasElement, metadata: InstagramFileMetadata) {
+function drawCoverFrame(context: CanvasRenderingContext2D, gifFrame: HTMLCanvasElement, metadata: InstagramFileMetadata, hasGif: boolean) {
   context.fillStyle = "#000";
   context.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
   const maxWidth = 608;
   const maxHeight = 450;
-  const scale = Math.min(maxWidth / gifFrame.width, maxHeight / gifFrame.height);
-  const width = Math.max(1, Math.round(gifFrame.width * scale));
-  const height = Math.max(1, Math.round(gifFrame.height * scale));
-  context.imageSmoothingEnabled = false;
-  context.drawImage(gifFrame, Math.round((CANVAS_SIZE - width) / 2), 34 + Math.round((maxHeight - height) / 2), width, height);
+  if (hasGif) {
+    const scale = Math.min(maxWidth / gifFrame.width, maxHeight / gifFrame.height);
+    const width = Math.max(1, Math.round(gifFrame.width * scale));
+    const height = Math.max(1, Math.round(gifFrame.height * scale));
+    context.imageSmoothingEnabled = false;
+    context.drawImage(gifFrame, Math.round((CANVAS_SIZE - width) / 2), 34 + Math.round((maxHeight - height) / 2), width, height);
+  }
 
   context.fillStyle = "#fff";
   context.textBaseline = "top";
@@ -113,20 +115,27 @@ function drawCoverFrame(context: CanvasRenderingContext2D, gifFrame: HTMLCanvasE
     `File size: ${formatCaptionBytes(metadata.size)}`
   ];
   lines.forEach((line, index) => {
-    context.font = fitFont(context, line, 608, 30);
-    context.fillText(line, 56, 520 + index * 48);
+    context.font = fitFont(context, line, 608, hasGif ? 30 : 38);
+    context.fillText(line, 56, (hasGif ? 520 : 270) + index * (hasGif ? 48 : 64));
   });
 }
 
 function fitFont(context: CanvasRenderingContext2D, text: string, maxWidth: number, startingSize: number) {
   let size = startingSize;
   while (size > 16) {
-    const font = `${size}px "Times New Roman", Times, serif`;
+    const font = `${size}px "Los Angeles", "Times New Roman", Times, serif`;
     context.font = font;
     if (context.measureText(text).width <= maxWidth) return font;
     size -= 1;
   }
-  return `16px "Times New Roman", Times, serif`;
+  return `16px "Los Angeles", "Times New Roman", Times, serif`;
+}
+
+function blankFrame() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1;
+  canvas.height = 1;
+  return canvas;
 }
 
 function frameIndexAtTime(durations: number[], timeMs: number) {

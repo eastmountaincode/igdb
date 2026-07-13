@@ -278,6 +278,41 @@ dt {
   gap: 0.65rem;
 }
 
+.display-preview {
+  position: relative;
+  display: grid;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: #000;
+  color: #fff;
+  font-family: "Los Angeles", "Times New Roman", Times, serif;
+}
+
+.display-preview img {
+  width: calc(100% - 16%);
+  height: 62.5%;
+  margin: 4.7% 8% 0;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+
+.display-preview figcaption {
+  display: grid;
+  align-content: center;
+  gap: 4.5%;
+  padding: 8%;
+  font-size: clamp(1rem, 3.1vw, 1.8rem);
+  overflow-wrap: anywhere;
+}
+
+.display-preview figcaption.has-gif {
+  position: absolute;
+  inset: 72% 0 0;
+  align-content: start;
+  padding-top: 0;
+  font-size: clamp(0.85rem, 2vw, 1.25rem);
+}
+
 .write-output .button-row {
   margin-top: 0;
 }

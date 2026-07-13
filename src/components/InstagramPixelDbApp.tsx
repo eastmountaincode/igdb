@@ -15,8 +15,6 @@ import {
 import { buildInstagramCaption } from "@/instagram-caption";
 import { encodeGifCoverVideo } from "@/cover-video";
 import {
-  MAX_SOURCE_FILE_BYTES,
-  MAX_SOURCE_FILE_LABEL,
   MAX_SOURCE_FILE_WITH_COVER_BYTES,
   MAX_SOURCE_FILE_WITH_COVER_LABEL,
   WRITE_SPEED_LABEL
@@ -28,6 +26,7 @@ export function InstagramPixelDbApp() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("write");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [coverGif, setCoverGif] = useState<File | null>(null);
+  const [coverGifUrl, setCoverGifUrl] = useState("");
   const [coverVideo, setCoverVideo] = useState<Blob | null>(null);
   const [encodedVideos, setEncodedVideos] = useState<EncodedVideo[]>([]);
   const [decodedChunks, setDecodedChunks] = useState<DecodeResult[]>([]);
@@ -45,8 +44,8 @@ export function InstagramPixelDbApp() {
   const [publishedUrl, setPublishedUrl] = useState("");
   const [publishRequestId, setPublishRequestId] = useState("");
   const captionPreviewRef = useRef<HTMLTextAreaElement>(null);
-  const activeFileLimit = coverGif ? MAX_SOURCE_FILE_WITH_COVER_BYTES : MAX_SOURCE_FILE_BYTES;
-  const activeFileLimitLabel = coverGif ? MAX_SOURCE_FILE_WITH_COVER_LABEL : MAX_SOURCE_FILE_LABEL;
+  const activeFileLimit = MAX_SOURCE_FILE_WITH_COVER_BYTES;
+  const activeFileLimitLabel = MAX_SOURCE_FILE_WITH_COVER_LABEL;
   const fileTooLarge = Boolean(selectedFile && selectedFile.size > activeFileLimit);
   const captionPreview = selectedFile
     ? buildInstagramCaption({
@@ -63,6 +62,16 @@ export function InstagramPixelDbApp() {
     textarea.style.height = "auto";
     textarea.style.height = `${textarea.scrollHeight + 2}px`;
   }, [captionPreview]);
+
+  useEffect(() => {
+    if (!coverGif) {
+      setCoverGifUrl("");
+      return;
+    }
+    const url = URL.createObjectURL(coverGif);
+    setCoverGifUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [coverGif]);
 
   const recoveredChunks = decodedChunks.filter((chunk) => chunk.ok && chunk.kind === "data").length;
   const expectedChunks = decodedChunks[0]?.totalChunks ?? 0;
@@ -127,16 +136,14 @@ export function InstagramPixelDbApp() {
     setCoverVideo(null);
     try {
       const videos = await encodeFileAsVideos(file, setEncodeProgress);
-      if (coverGif && videos.length >= 8) {
-        throw new Error("This file needs all eight carousel videos. Remove the display GIF or choose a file 25 MB or smaller.");
+      if (videos.length >= 8) {
+        throw new Error("This file needs all eight carousel videos. Choose a file 25 MB or smaller so the display video fits first.");
       }
-      const nextCoverVideo = coverGif
-        ? await encodeGifCoverVideo(coverGif, {
+      const nextCoverVideo = await encodeGifCoverVideo(coverGif, {
             name: file.name,
             type: file.type || "application/octet-stream",
             size: file.size
-          }, setEncodeProgress)
-        : null;
+          }, setEncodeProgress);
       setEncodedVideos(videos);
       setCoverVideo(nextCoverVideo);
       setEncodeProgress({ phase: videos.length > 1 ? "MP4 set ready" : "MP4 ready", completed: videos.length, total: videos.length });
@@ -251,14 +258,14 @@ export function InstagramPixelDbApp() {
   }
 
   async function handlePublishToInstagram() {
-    if (!selectedFile || !encodedVideos.length || (coverGif && !coverVideo) || isPublishing) return;
+    if (!selectedFile || !encodedVideos.length || !coverVideo || isPublishing) return;
     setIsPublishing(true);
     setPublishMessage("Uploading to @normal_shopkeep...");
     setPublishedUrl("");
     try {
       const videos = [...encodedVideos].sort((left, right) => left.segmentIndex - right.segmentIndex);
       const uploadParts = [
-        ...(coverVideo ? [{ blob: coverVideo, fileName: "igdb-display-cover.mp4", audioPayload: undefined as Blob | undefined }] : []),
+        { blob: coverVideo, fileName: "igdb-display-cover.mp4", audioPayload: undefined as Blob | undefined },
         ...videos.map((video) => ({
           blob: video.blob,
           fileName: generatedVideoFileName(selectedFile.name, video.segmentIndex, video.totalSegments),
@@ -277,7 +284,7 @@ export function InstagramPixelDbApp() {
         }
         form.set("partIndex", String(index));
         form.set("totalParts", String(uploadParts.length));
-        if (index === 0 && coverVideo) form.set("displayCover", "true");
+        if (index === 0) form.set("displayCover", "true");
         if (uploadId) form.set("uploadId", uploadId);
         if (uploadToken) form.set("uploadToken", uploadToken);
         const uploadResponse = await fetch("/api/instagram/upload", { method: "POST", body: form });
@@ -440,6 +447,14 @@ export function InstagramPixelDbApp() {
 
           <fieldset className="panel write-output">
             <legend>publish to @normal_shopkeep</legend>
+              <figure className="display-preview" aria-label="Instagram display video preview">
+                {coverGifUrl ? <img src={coverGifUrl} alt="" /> : null}
+                <figcaption className={coverGif ? "has-gif" : ""}>
+                  <span>File name: {selectedFile?.name ?? "—"}</span>
+                  <span>File type: {selectedFile?.type || (selectedFile ? "application/octet-stream" : "—")}</span>
+                  <span>File size: {selectedFile ? formatBytes(selectedFile.size) : "—"}</span>
+                </figcaption>
+              </figure>
               <label className="field-label" htmlFor="instagram-note">
                 optional note
                 <textarea
@@ -466,7 +481,7 @@ export function InstagramPixelDbApp() {
               <div className="button-row">
                 <button
                   type="button"
-                  disabled={!selectedFile || fileTooLarge || !encodedVideos.length || (Boolean(coverGif) && !coverVideo) || isPublishing}
+                  disabled={!selectedFile || fileTooLarge || !encodedVideos.length || !coverVideo || isPublishing}
                   onClick={handlePublishToInstagram}
                 >
                   {isPublishing ? "publishing..." : "publish to Instagram"}
