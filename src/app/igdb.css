@@ -231,8 +231,19 @@ table {
 .file-picker-action {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.4rem;
   width: 100%;
+}
+
+.file-picker-action .file-error {
+  margin: 0;
+}
+
+.file-picker-action input[type="file"] {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 100%;
 }
 
 .next-step-arrow {

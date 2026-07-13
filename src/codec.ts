@@ -658,7 +658,9 @@ async function encodeHybridVideoSegment({
   const firstAudioChunk = segment.audioChunks[0];
   return {
     blob,
-    audioPayload: new Blob(audioPayloads, { type: "application/octet-stream" }),
+    audioPayload: audioPayloadBytes > 0
+      ? new Blob(audioPayloads, { type: "application/octet-stream" })
+      : undefined,
     url: URL.createObjectURL(blob),
     frameCount: renderJobs.length * repeatFrames,
     chunkCount: renderJobs.length,

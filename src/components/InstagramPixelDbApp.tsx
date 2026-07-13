@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import {
   decodeVideoFile,
   downloadBlob,
@@ -25,7 +25,6 @@ export function InstagramPixelDbApp() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("write");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileSelectionMessage, setFileSelectionMessage] = useState("");
-  const filePickerPendingRef = useRef(false);
   const [coverMedia, setCoverMedia] = useState<File | null>(null);
   const [coverVideo, setCoverVideo] = useState<Blob | null>(null);
   const [coverVideoUrl, setCoverVideoUrl] = useState("");
@@ -69,24 +68,6 @@ export function InstagramPixelDbApp() {
   }, [coverVideo]);
 
   useEffect(() => {
-    const input = document.getElementById("file-input") as HTMLInputElement | null;
-
-    function handlePickerCancel() {
-      if (!filePickerPendingRef.current) return;
-      filePickerPendingRef.current = false;
-      if (input?.files?.length) return;
-      setFileSelectionMessage(
-        "No file was selected. If you chose a file, its filename may be too long for Zo to transfer. Shorten the filename and try again."
-      );
-    }
-
-    input?.addEventListener("cancel", handlePickerCancel);
-    return () => {
-      input?.removeEventListener("cancel", handlePickerCancel);
-    };
-  }, []);
-
-  useEffect(() => {
     let cancelled = false;
     if (!selectedFile) {
       setCoverVideo(null);
@@ -123,21 +104,18 @@ export function InstagramPixelDbApp() {
   }
 
   function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
-    filePickerPendingRef.current = false;
     const file = event.target.files?.[0] ?? null;
     if (!file) {
-      setFileSelectionMessage(
-        "No file was selected. If you chose a file, its filename may be too long for Zo to transfer. Shorten the filename and try again."
-      );
+      return;
+    }
+    if (file.name.length > 1024) {
+      setFileSelectionMessage("filename is too long");
+      event.target.value = "";
+      selectFile(null);
       return;
     }
     setFileSelectionMessage("");
     selectFile(file);
-  }
-
-  function handleFilePickerOpen() {
-    filePickerPendingRef.current = true;
-    setFileSelectionMessage("");
   }
 
   function selectFile(file: File | null) {
@@ -333,7 +311,7 @@ export function InstagramPixelDbApp() {
         const video = uploadParts[index];
         const form = new FormData();
         form.set("video", video.blob, video.fileName);
-        if (video.audioPayload) {
+        if (video.audioPayload && video.audioPayload.size > 0) {
           form.set("audioPayload", video.audioPayload, `part-${index + 1}.bin`);
         }
         form.set("partIndex", String(index));
@@ -493,17 +471,16 @@ export function InstagramPixelDbApp() {
                 <input
                   id="file-input"
                   type="file"
-                  onClick={handleFilePickerOpen}
+                  onClick={() => setFileSelectionMessage("")}
                   onChange={handleFileSelection}
                 />
                 {nextWriteStep === "choose-file" ? <span className="next-step-arrow" aria-hidden="true">←</span> : null}
+                {fileSelectionMessage ? <span className="file-error" role="alert">{fileSelectionMessage}</span> : null}
               </span>
               {selectedFile ? <strong>{selectedFile.name} ({formatBytes(selectedFile.size)})</strong> : null}
             </div>
 
             {fileTooLarge ? <p className="file-error" role="alert">file exceeds the {activeFileLimitLabel} maximum</p> : null}
-            {fileSelectionMessage ? <p className="file-error" role="alert">{fileSelectionMessage}</p> : null}
-
             <div className="button-row">
               <button
                 type="button"

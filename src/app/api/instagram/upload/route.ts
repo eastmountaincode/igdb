@@ -15,15 +15,16 @@ export async function POST(request: Request) {
     if (!(video instanceof File) || video.size <= 0 || video.size > MAX_VIDEO_BYTES || (video.type && video.type !== "video/mp4")) {
       return Response.json({ error: "Upload must be an MP4 smaller than 100 MB." }, { status: 400 });
     }
-    if (audioPayload !== null && (!(audioPayload instanceof File) || audioPayload.size <= 0 || audioPayload.size > 80)) {
-      return Response.json({ error: "Invalid audio payload." }, { status: 400 });
+    if (audioPayload !== null && (!(audioPayload instanceof File) || audioPayload.size > 80)) {
+      return Response.json({ error: "Audio data must be no more than 80 bytes." }, { status: 400 });
     }
+    const usableAudioPayload = audioPayload instanceof File && audioPayload.size > 0 ? audioPayload : undefined;
     if (!Number.isInteger(partIndex) || !Number.isInteger(totalParts) || totalParts < 1 || totalParts > 8 || partIndex < 0 || partIndex >= totalParts) {
       return Response.json({ error: "Invalid video part." }, { status: 400 });
     }
     const result = await stageInstagramVideoPart({
       video,
-      audioPayload: audioPayload instanceof File ? audioPayload : undefined,
+      audioPayload: usableAudioPayload,
       partIndex,
       totalParts,
       uploadId: String(form.get("uploadId") ?? "") || undefined,
