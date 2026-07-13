@@ -152,6 +152,14 @@ function drawCoverFrame(context: CanvasRenderingContext2D, gifFrame: HTMLCanvasE
     });
     if (sectionIndex < sections.length - 1) cursorY += sectionGap;
   });
+
+  context.save();
+  context.fillStyle = "#fff";
+  context.font = `28px "Redaction 35", "Times New Roman", Times, serif`;
+  context.textAlign = "right";
+  context.textBaseline = "bottom";
+  context.fillText("IGDB", CANVAS_SIZE - 40, CANVAS_SIZE - 36);
+  context.restore();
 }
 
 function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
