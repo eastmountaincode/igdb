@@ -756,6 +756,9 @@ async function decodeHybridVideoFile(
   const template = visualChunks.find((chunk) => chunk.ok && chunk.kind === "data");
   if (!template) return visualChunks;
 
+  const fullVisualChunkCount = Math.ceil(template.fileSize / PAYLOAD_BYTES_PER_IMAGE);
+  if (template.totalChunks === fullVisualChunkCount) return visualChunks;
+
   const maxChunkIndex = Math.max(...visualChunks.filter((chunk) => chunk.kind === "data").map((chunk) => chunk.chunkIndex));
   const audioStartChunkIndex = maxChunkIndex + 1;
   const audioChunkCount = Math.min(AUDIO_PACKETS_PER_VIDEO, Math.max(0, template.totalChunks - audioStartChunkIndex));
