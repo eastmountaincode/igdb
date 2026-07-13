@@ -166,7 +166,7 @@ function drawCoverFrame(context: CanvasRenderingContext2D, gifFrame: HTMLCanvasE
   context.fillRect(60, 34, legendWidth + 20, 36);
   context.fillStyle = "#000";
   context.textBaseline = "top";
-  context.fillText("Normal Shopkeep", 70, 34);
+  context.fillText("Normal Shopkeep", 70, 40);
 }
 
 function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
