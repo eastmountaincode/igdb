@@ -30,6 +30,7 @@ type GraphResponse = {
   status?: string;
   permalink?: string;
   error?: { message?: string; code?: number };
+  [containerId: string]: unknown;
 };
 
 export async function publishInstagramVideos(input: {
@@ -280,10 +281,12 @@ async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
       }, accessToken);
       if (!child.id) throw graphError(child, `Instagram rejected video ${index + 1}.`);
       console.log("[instagram-publish] child created", { jobId: job.id, requestId: job.publishRequestId, part: index + 1, containerId: child.id });
-      await waitForContainer(child.id, accessToken, `video ${index + 1}`);
-      console.log("[instagram-publish] child finished", { jobId: job.id, requestId: job.publishRequestId, part: index + 1, containerId: child.id });
       return child.id;
     }));
+    await waitForContainers(childIds, accessToken);
+    childIds.forEach((containerId, index) => {
+      console.log("[instagram-publish] child finished", { jobId: job.id, requestId: job.publishRequestId, part: index + 1, containerId });
+    });
 
     let creationId = childIds[0];
     if (childIds.length > 1) {
@@ -392,6 +395,36 @@ async function waitForContainer(containerId: string, accessToken: string, label 
       throw new Error(`Instagram could not process ${label}.`);
     }
     await new Promise((resolve) => setTimeout(resolve, 4000));
+  }
+  throw new Error("Instagram video processing timed out.");
+}
+
+async function waitForContainers(containerIds: string[], accessToken: string) {
+  const pending = new Set(containerIds);
+  let delayMs = 6000;
+  for (let attempt = 0; attempt < 75; attempt += 1) {
+    const response = await graphGet("/", {
+      ids: [...pending].join(","),
+      fields: "status_code,status"
+    }, accessToken);
+    if (response.error) {
+      if (response.error.code === 4) {
+        delayMs = Math.min(30000, Math.max(15000, delayMs * 2));
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+      throw graphError(response, "Instagram could not check video processing.");
+    }
+    for (const containerId of pending) {
+      const status = response[containerId] as GraphResponse | undefined;
+      if (status?.status_code === "FINISHED") pending.delete(containerId);
+      if (status?.status_code === "ERROR" || status?.status_code === "EXPIRED") {
+        console.error("[instagram-publish] container failed", { containerId, response: status });
+        throw new Error(`Instagram could not process video ${containerIds.indexOf(containerId) + 1}.`);
+      }
+    }
+    if (!pending.size) return;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
   throw new Error("Instagram video processing timed out.");
 }
