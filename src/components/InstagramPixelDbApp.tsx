@@ -424,11 +424,6 @@ export function InstagramPixelDbApp() {
                 </strong>
               </label>
 
-            <label className="field-label optional-gif" htmlFor="cover-gif-input">
-              display GIF (optional)
-              <input id="cover-gif-input" type="file" accept="image/gif,.gif" onChange={handleCoverSelection} />
-            </label>
-
             {fileTooLarge ? <p className="file-error" role="alert">file exceeds the {activeFileLimitLabel} maximum</p> : null}
 
             <div className="button-row">
@@ -455,6 +450,14 @@ export function InstagramPixelDbApp() {
                   <span>File size: {selectedFile ? formatBytes(selectedFile.size) : "—"}</span>
                 </figcaption>
               </figure>
+              <label className="field-label" htmlFor="cover-gif-input">
+                display GIF (optional)
+                <span className="dropzone compact-picker">
+                  <input id="cover-gif-input" type="file" accept="image/gif,.gif" onChange={handleCoverSelection} />
+                  <span>choose file</span>
+                  <strong>{coverGif?.name ?? "no file selected"}</strong>
+                </span>
+              </label>
               <label className="field-label" htmlFor="instagram-note">
                 optional note
                 <textarea

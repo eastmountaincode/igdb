@@ -225,10 +225,6 @@ dd {
   gap: 0.25rem;
 }
 
-.optional-gif {
-  margin-top: 0.65rem;
-}
-
 .encode-progress {
   display: grid;
   gap: 0.3rem;
@@ -319,6 +315,11 @@ dt {
   align-content: start;
   padding-top: 0;
   font-size: clamp(0.85rem, 2vw, 1.25rem);
+}
+
+.compact-picker {
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
 }
 
 .write-output .button-row {
