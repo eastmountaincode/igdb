@@ -45,3 +45,4 @@ pnpm-debug.log*
 .instagram-evidence/
 .instagram-uploads/
 .instagram-media-index.json
+.instagram-publication-status.json
