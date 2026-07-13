@@ -252,10 +252,17 @@ export function InstagramPixelDbApp() {
 
   async function handleAssemble() {
     const assembled = await reassemble(decodedChunks);
+    if (!assembled.hashOk) {
+      setDecodeMessages((current) => [
+        ...current,
+        `Download blocked: ${assembled.fileName} failed SHA-256 verification.`
+      ]);
+      return;
+    }
     downloadBlob(assembled.blob, assembled.fileName);
     setDecodeMessages((current) => [
       ...current,
-      `Reassembled ${assembled.fileName}. SHA-256 ${assembled.hashOk ? "OK" : "MISMATCH"}.`
+      `Downloaded ${assembled.fileName}. SHA-256 OK.`
     ]);
   }
 

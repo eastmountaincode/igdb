@@ -38,7 +38,7 @@ export const VIDEO_EFFECTIVE_BYTES_PER_SECOND = Math.floor(
     (VIDEO_REPEAT_FRAMES * (VIDEO_PARITY_GROUP_SIZE + 1))
 );
 export const VIDEO_TARGET_BYTES =
-  maxDataChunksForTargetVideo(VIDEO_REPEAT_FRAMES, VIDEO_TARGET_SECONDS) * PAYLOAD_BYTES_PER_IMAGE + AUDIO_PAYLOAD_BYTES;
+  maxDataChunksForTargetVideo(VIDEO_REPEAT_FRAMES, VIDEO_TARGET_SECONDS) * PAYLOAD_BYTES_PER_IMAGE;
 
 export type EncodedImage = {
   canvas: HTMLCanvasElement;
@@ -207,7 +207,7 @@ const decoder = new TextDecoder();
 export function capacitySummary() {
   const videoMaxDataChunks = maxDataChunksForTargetVideo(VIDEO_REPEAT_FRAMES, VIDEO_TARGET_SECONDS);
   const videoMaxVisualPayloadBytes = videoMaxDataChunks * PAYLOAD_BYTES_PER_IMAGE;
-  const videoMaxPayloadBytes = videoMaxVisualPayloadBytes + AUDIO_PAYLOAD_BYTES;
+  const videoMaxPayloadBytes = videoMaxVisualPayloadBytes;
   return {
     canvasSize: CANVAS_SIZE,
     cellSize: CELL_SIZE,
@@ -333,7 +333,7 @@ async function encodeFileAsHybridVideos(
   const fileHash = await sha256Hex(bytes);
   const maxVisualChunksPerVideo = maxDataChunksForTargetVideo(VIDEO_REPEAT_FRAMES, VIDEO_TARGET_SECONDS);
   const segments = planHybridSegments(bytes.length, maxVisualChunksPerVideo);
-  const totalChunks = segments.reduce((sum, segment) => sum + segment.visualChunks.length + segment.audioChunks.length, 0);
+  const totalChunks = segments.reduce((sum, segment) => sum + segment.visualChunks.length, 0);
   const encodeSegment = (segmentIndex: number, segmentProgress?: (progress: EncodeVideoProgress) => void) =>
     encodeHybridVideoSegment({
       bytes,
@@ -514,17 +514,8 @@ function planHybridSegments(fileSize: number, maxVisualChunksPerVideo: number): 
   let chunkIndex = 0;
   const maxVisualBytesPerVideo = maxVisualChunksPerVideo * PAYLOAD_BYTES_PER_IMAGE;
   while (offset < fileSize) {
-    const remainingBytes = fileSize - offset;
-    const maxAudioBytesForSegment = Math.min(AUDIO_PAYLOAD_BYTES, Math.max(0, remainingBytes - 1));
-    const initialVisualBytes = Math.min(remainingBytes - (maxAudioBytesForSegment ? 1 : 0), maxVisualBytesPerVideo);
-    const visualChunkCount = Math.ceil(initialVisualBytes / PAYLOAD_BYTES_PER_IMAGE);
-    const visualDurationSeconds = transmittedFrameCountForDataChunks(visualChunkCount) * (VIDEO_REPEAT_FRAMES / VIDEO_FPS);
-    const audioCapacityBytes = audioProbeByteCapacityForDuration(visualDurationSeconds, AUDIO_PAYLOAD_BYTES);
-    const audioBytesForSegment = Math.min(maxAudioBytesForSegment, Math.max(maxAudioBytesForSegment ? 1 : 0, audioCapacityBytes));
-    const visualBytesForSegment = Math.min(remainingBytes - audioBytesForSegment, maxVisualBytesPerVideo);
     const segmentStart = offset;
-    const visualEnd = segmentStart + visualBytesForSegment;
-    const audioEnd = visualEnd + audioBytesForSegment;
+    const visualEnd = Math.min(fileSize, segmentStart + maxVisualBytesPerVideo);
     const visualChunks: HybridSegmentPlan["visualChunks"] = [];
     while (offset < visualEnd) {
       const payloadLength = Math.min(PAYLOAD_BYTES_PER_IMAGE, visualEnd - offset);
@@ -533,19 +524,16 @@ function planHybridSegments(fileSize: number, maxVisualChunksPerVideo: number): 
       chunkIndex++;
     }
 
+    const visualDurationSeconds = transmittedFrameCountForDataChunks(visualChunks.length) * (VIDEO_REPEAT_FRAMES / VIDEO_FPS);
+    const audioBytesForSegment = Math.min(
+      visualEnd - segmentStart,
+      audioProbeByteCapacityForDuration(visualDurationSeconds, AUDIO_PAYLOAD_BYTES)
+    );
     const audioChunks: HybridSegmentPlan["audioChunks"] = [];
-    while (offset < audioEnd) {
-      const payloadLength = Math.min(AUDIO_PROBE_PAYLOAD_BYTES, audioEnd - offset);
-      audioChunks.push({ chunkIndex, payloadStart: offset, payloadLength });
-      offset += payloadLength;
-      chunkIndex++;
-    }
-
-    if (!visualChunks.length && !audioChunks.length) {
-      const payloadLength = Math.min(PAYLOAD_BYTES_PER_IMAGE, fileSize - offset);
-      visualChunks.push({ chunkIndex, payloadStart: offset, payloadLength });
-      offset += payloadLength;
-      chunkIndex++;
+    for (let audioOffset = segmentStart; audioOffset < segmentStart + audioBytesForSegment;) {
+      const payloadLength = Math.min(AUDIO_PROBE_PAYLOAD_BYTES, segmentStart + audioBytesForSegment - audioOffset);
+      audioChunks.push({ chunkIndex: visualChunks[0]?.chunkIndex ?? 0, payloadStart: audioOffset, payloadLength });
+      audioOffset += payloadLength;
     }
 
     segments.push({ segmentIndex: segments.length, visualChunks, audioChunks });
@@ -650,21 +638,20 @@ async function encodeHybridVideoSegment({
   const firstVisualChunk = segment.visualChunks[0];
   const lastVisualChunk = segment.visualChunks.at(-1);
   const firstAudioChunk = segment.audioChunks[0];
-  const lastAudioChunk = segment.audioChunks.at(-1);
   return {
     blob,
     audioPayload: new Blob(audioPayloads, { type: "application/octet-stream" }),
     url: URL.createObjectURL(blob),
     frameCount: renderJobs.length * repeatFrames,
-    chunkCount: renderJobs.length + segment.audioChunks.length,
-    payloadBytes: visualPayloadBytes + audioPayloadBytes,
+    chunkCount: renderJobs.length,
+    payloadBytes: visualPayloadBytes,
     fileBytes: bytes.length,
     durationSeconds,
     segmentIndex: segment.segmentIndex,
     totalSegments,
     dataChunkStart: firstVisualChunk?.chunkIndex ?? firstAudioChunk?.chunkIndex ?? 0,
-    dataChunkEnd: lastAudioChunk?.chunkIndex ?? lastVisualChunk?.chunkIndex ?? 0,
-    dataChunkCount: dataChunkCount + segment.audioChunks.length,
+    dataChunkEnd: lastVisualChunk?.chunkIndex ?? 0,
+    dataChunkCount,
     audioPacketCount: segment.audioChunks.length,
     audioPayloadBytes,
     caption: [
@@ -672,7 +659,7 @@ async function encodeHybridVideoSegment({
       `file=${file.name}`,
       `segment=${segment.segmentIndex + 1}/${totalSegments}`,
       `visualChunks=${firstVisualChunk ? `${firstVisualChunk.chunkIndex + 1}-${(lastVisualChunk?.chunkIndex ?? firstVisualChunk.chunkIndex) + 1}` : "none"}/${totalChunks}`,
-      `audioChunks=${firstAudioChunk ? `${firstAudioChunk.chunkIndex + 1}-${(lastAudioChunk?.chunkIndex ?? firstAudioChunk.chunkIndex) + 1}/${totalChunks} ${audioPayloadBytes} bytes` : "none"}`,
+      `audioCopy=${firstAudioChunk ? `${segment.audioChunks.length} packets ${audioPayloadBytes} bytes` : "none"}`,
       `chunks=${renderJobs.length}`,
       `fps=${VIDEO_FPS}`,
       `repeat=${repeatFrames}`,
