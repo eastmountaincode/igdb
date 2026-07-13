@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildInstagramCaption, type InstagramFileMetadata } from "@/instagram-caption";
 import { AUDIO_PROBE_SAMPLE_RATE, synthesizeDtmfProbePackets } from "@/audio-codec";
-import { recordPublishedMedia } from "@/lib/instagram-media-index";
+import { findPublishedMediaByRequestId, recordPublishedMedia } from "@/lib/instagram-media-index";
 
 const API_VERSION = "v24.0";
 const INSTAGRAM_ACCOUNT_ID = "28189490653969128";
@@ -20,6 +20,7 @@ type StagedJob = {
   files: string[];
   totalParts: number;
   displayCover?: boolean;
+  publishRequestId?: string;
   createdAt: string;
 };
 
@@ -147,6 +148,7 @@ export async function publishStagedInstagramVideos(input: {
   uploadToken: string;
   metadata: InstagramFileMetadata;
   mediaBaseUrl: string;
+  publishRequestId?: string;
 }) {
   const id = safeSegment(input.uploadId);
   const directory = join(JOB_ROOT, id);
@@ -162,6 +164,7 @@ export async function publishStagedInstagramVideos(input: {
     const job = JSON.parse(await readFile(join(directory, "job.json"), "utf8")) as StagedJob;
     if (job.mediaToken !== input.uploadToken) throw new Error("Invalid upload session.");
     if (job.files.length !== job.totalParts) throw new Error("Not all video parts finished uploading.");
+    job.publishRequestId = input.publishRequestId;
     job.caption = buildInstagramCaption(input.metadata);
     await writeFile(join(directory, "job.json"), JSON.stringify(job));
     return await publishStagedJob(job, input.mediaBaseUrl);
@@ -215,6 +218,28 @@ async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
   const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN_NORMAL_SHOPKEEP;
   if (!accessToken) throw new Error("Instagram publishing is not configured.");
   try {
+    if (job.publishRequestId) {
+      const existing = await findPublishedMediaByRequestId(job.publishRequestId);
+      if (existing) {
+        const permalink = existing.permalink || await waitForPublishedPermalink(existing.mediaId, accessToken);
+        if (!existing.permalink) {
+          await recordPublishedMedia(existing.mediaId, existing.displayCover, {
+            requestId: job.publishRequestId,
+            permalink,
+            parts: existing.parts ?? job.totalParts
+          });
+        }
+        console.log("[instagram-publish] returning existing publication", { requestId: job.publishRequestId, mediaId: existing.mediaId });
+        return {
+          mediaId: existing.mediaId,
+          permalink,
+          username: INSTAGRAM_USERNAME,
+          caption: job.caption,
+          parts: existing.parts ?? job.totalParts
+        };
+      }
+    }
+    console.log("[instagram-publish] starting", { jobId: job.id, requestId: job.publishRequestId, parts: job.files.length, displayCover: job.displayCover === true });
     const childIds: string[] = [];
     for (let index = 0; index < job.files.length; index += 1) {
       const mediaUrl = `${mediaBaseUrl}/api/instagram/media/${job.id}/${encodeURIComponent(job.files[index])}?token=${job.mediaToken}`;
@@ -244,13 +269,21 @@ async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
 
     const published = await graphPost(`/${INSTAGRAM_ACCOUNT_ID}/media_publish`, { creation_id: creationId }, accessToken);
     if (!published.id) throw graphError(published, "Instagram did not publish the post.");
-    const media = await graphGet(`/${published.id}`, {
-      fields: "id,permalink,media_type,media_product_type,username"
-    }, accessToken);
-    await recordPublishedMedia(published.id, job.displayCover === true);
+    console.log("[instagram-publish] media published", { jobId: job.id, requestId: job.publishRequestId, mediaId: published.id });
+    await recordPublishedMedia(published.id, job.displayCover === true, {
+      requestId: job.publishRequestId,
+      parts: childIds.length
+    });
+    const permalink = await waitForPublishedPermalink(published.id, accessToken);
+    await recordPublishedMedia(published.id, job.displayCover === true, {
+      requestId: job.publishRequestId,
+      permalink,
+      parts: childIds.length
+    });
+    console.log("[instagram-publish] permalink resolved", { mediaId: published.id, permalink });
     return {
       mediaId: published.id,
-      permalink: media.permalink,
+      permalink,
       username: INSTAGRAM_USERNAME,
       caption: job.caption,
       parts: childIds.length
@@ -258,6 +291,18 @@ async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
   } finally {
     await rm(join(JOB_ROOT, job.id), { recursive: true, force: true });
   }
+}
+
+async function waitForPublishedPermalink(mediaId: string, accessToken: string) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const media = await graphGet(`/${mediaId}`, {
+      fields: "id,permalink,media_type,media_product_type,username"
+    }, accessToken);
+    if (media.permalink) return media.permalink;
+    if (media.error && attempt >= 4) throw graphError(media, "Instagram published the post but did not return its URL.");
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  throw new Error("Instagram published the post but its URL is still processing. Retrying will return the same post.");
 }
 
 export async function muxDtmfAudio(inputPath: string, outputPath: string, payload: Uint8Array, directory: string, index: number) {

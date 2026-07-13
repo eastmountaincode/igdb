@@ -43,6 +43,7 @@ export function InstagramPixelDbApp() {
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishMessage, setPublishMessage] = useState("");
   const [publishedUrl, setPublishedUrl] = useState("");
+  const [publishRequestId, setPublishRequestId] = useState("");
   const captionPreviewRef = useRef<HTMLTextAreaElement>(null);
   const activeFileLimit = coverGif ? MAX_SOURCE_FILE_WITH_COVER_BYTES : MAX_SOURCE_FILE_BYTES;
   const activeFileLimitLabel = coverGif ? MAX_SOURCE_FILE_WITH_COVER_LABEL : MAX_SOURCE_FILE_LABEL;
@@ -85,6 +86,7 @@ export function InstagramPixelDbApp() {
     setEncodedVideos([]);
     setPublishMessage("");
     setPublishedUrl("");
+    setPublishRequestId(file ? crypto.randomUUID() : "");
   }
 
   function handleCoverSelection(event: ChangeEvent<HTMLInputElement>) {
@@ -297,7 +299,8 @@ export function InstagramPixelDbApp() {
           originalType: selectedFile.type || "application/octet-stream",
           originalSize: selectedFile.size,
           note: publishNote.trim(),
-          confirmation: "publish-to-normal-shopkeep"
+          confirmation: "publish-to-normal-shopkeep",
+          publishRequestId: publishRequestId || crypto.randomUUID()
         })
       });
       const result = await readJsonResponse(response);

@@ -6,11 +6,10 @@ export const dynamic = "force-dynamic";
 
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const MAX_NOTE_LENGTH = 1000;
-const attemptsByAddress = new Map<string, number[]>();
+const attemptsByAddress = new Map<string, Array<{ time: number; key: string }>>();
 
 export async function POST(request: Request) {
   try {
-    enforceRateLimit(request);
     const contentType = request.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
       const body = await request.json() as Record<string, unknown>;
@@ -21,6 +20,9 @@ export async function POST(request: Request) {
       const originalType = requiredValue(body.originalType, "originalType", 255);
       const originalSize = Number(body.originalSize);
       const note = String(body.note ?? "").trim();
+      const uploadId = requiredValue(body.uploadId, "uploadId", 255);
+      const publishRequestId = optionalRequestId(body.publishRequestId);
+      enforceRateLimit(request, publishRequestId ?? uploadId);
       if (!Number.isSafeInteger(originalSize) || originalSize < 0 || originalSize > MAX_SOURCE_FILE_BYTES) {
         return Response.json({ error: `Files must be ${MAX_SOURCE_FILE_LABEL} or smaller.` }, { status: 413 });
       }
@@ -28,11 +30,13 @@ export async function POST(request: Request) {
         return Response.json({ error: `Note must be ${MAX_NOTE_LENGTH} characters or fewer.` }, { status: 400 });
       }
       const result = await publishStagedInstagramVideos({
-        uploadId: requiredValue(body.uploadId, "uploadId", 255),
+        uploadId,
         uploadToken: requiredValue(body.uploadToken, "uploadToken", 255),
         metadata: { name: originalName, type: originalType, size: originalSize, note },
-        mediaBaseUrl: getMediaBaseUrl(request)
+        mediaBaseUrl: getMediaBaseUrl(request),
+        publishRequestId
       });
+      console.log("[api/instagram/publish] success", { mediaId: result.mediaId, permalink: result.permalink, parts: result.parts });
       return Response.json(result);
     }
     if (!contentType.includes("multipart/form-data")) {
@@ -65,6 +69,7 @@ export async function POST(request: Request) {
     const originalName = requiredText(form, "originalName", 255);
     const originalType = requiredText(form, "originalType", 255);
     const originalSize = Number(form.get("originalSize"));
+    enforceRateLimit(request, `${originalName}:${originalSize}`);
     const note = String(form.get("note") ?? "").trim();
     if (!Number.isSafeInteger(originalSize) || originalSize < 0) {
       return Response.json({ error: "Invalid original file size." }, { status: 400 });
@@ -85,8 +90,16 @@ export async function POST(request: Request) {
     return Response.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Instagram publishing failed.";
+    console.error("[api/instagram/publish] failed", { message });
     return Response.json({ error: message }, { status: 500 });
   }
+}
+
+function optionalRequestId(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text) return undefined;
+  if (!/^[a-zA-Z0-9-]{16,80}$/.test(text)) throw new Error("Invalid publication request ID.");
+  return text;
 }
 
 function requiredValue(value: unknown, field: string, maxLength: number) {
@@ -111,11 +124,13 @@ function requiredText(form: FormData, field: string, maxLength: number) {
   return value;
 }
 
-function enforceRateLimit(request: Request) {
+function enforceRateLimit(request: Request, key: string) {
   const address = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
   const now = Date.now();
-  const recent = (attemptsByAddress.get(address) ?? []).filter((time) => now - time < 60 * 60 * 1000);
-  if (recent.length >= 3) throw new Error("Publishing limit reached. Try again later.");
-  recent.push(now);
+  const recent = (attemptsByAddress.get(address) ?? []).filter((attempt) => now - attempt.time < 60 * 60 * 1000);
+  if (!recent.some((attempt) => attempt.key === key)) {
+    if (recent.length >= 3) throw new Error("Publishing limit reached. Try again later.");
+    recent.push({ time: now, key });
+  }
   attemptsByAddress.set(address, recent);
 }

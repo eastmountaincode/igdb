@@ -3,12 +3,30 @@ import { join } from "node:path";
 
 const INDEX_PATH = join(process.cwd(), ".instagram-media-index.json");
 
-type MediaIndex = Record<string, { displayCover: boolean; createdAt: string }>;
+export type PublishedMediaRecord = {
+  displayCover: boolean;
+  createdAt: string;
+  requestId?: string;
+  permalink?: string;
+  parts?: number;
+};
 
-export async function recordPublishedMedia(mediaId: string, displayCover: boolean) {
+type MediaIndex = Record<string, PublishedMediaRecord>;
+
+export async function recordPublishedMedia(
+  mediaId: string,
+  displayCover: boolean,
+  details: { requestId?: string; permalink?: string; parts?: number } = {}
+) {
   const index = await readIndex();
-  index[mediaId] = { displayCover, createdAt: new Date().toISOString() };
+  index[mediaId] = { displayCover, createdAt: new Date().toISOString(), ...details };
   await writeFile(INDEX_PATH, JSON.stringify(index, null, 2));
+}
+
+export async function findPublishedMediaByRequestId(requestId: string) {
+  const index = await readIndex();
+  const match = Object.entries(index).find(([, record]) => record.requestId === requestId);
+  return match ? { mediaId: match[0], ...match[1] } : null;
 }
 
 export async function publishedMediaHasCover(mediaId: string) {
