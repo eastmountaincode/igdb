@@ -317,9 +317,7 @@ export function InstagramPixelDbApp() {
           audioPayload: video.audioPayload
         }))
       ];
-      let uploadId = "";
-      let uploadToken = "";
-      for (let index = 0; index < uploadParts.length; index += 1) {
+      const uploadPart = async (index: number, uploadId = "", uploadToken = "") => {
         setPublishMessage(`Uploading video ${index + 1} of ${uploadParts.length}...`);
         const video = uploadParts[index];
         const form = new FormData();
@@ -337,9 +335,14 @@ export function InstagramPixelDbApp() {
         if (!uploadResponse.ok || !uploadResult.uploadId || !uploadResult.uploadToken) {
           throw new Error(uploadResult.error || `Video ${index + 1} could not be uploaded.`);
         }
-        uploadId = uploadResult.uploadId;
-        uploadToken = uploadResult.uploadToken;
-      }
+        return { uploadId: uploadResult.uploadId, uploadToken: uploadResult.uploadToken };
+      };
+      const firstUpload = await uploadPart(0);
+      await Promise.all(
+        uploadParts.slice(1).map((_, offset) => uploadPart(offset + 1, firstUpload.uploadId, firstUpload.uploadToken))
+      );
+      const uploadId = firstUpload.uploadId;
+      const uploadToken = firstUpload.uploadToken;
       setPublishMessage("Publishing to @normal_shopkeep\u2026 keep this window open.");
       const requestId = publishRequestId || crypto.randomUUID();
       const publishBody = {

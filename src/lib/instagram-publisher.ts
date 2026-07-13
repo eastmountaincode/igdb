@@ -137,10 +137,32 @@ export async function stageInstagramVideoPart(input: {
     await rm(inputPath, { force: true });
   }
 
-  if (!job.files.includes(fileName)) job.files.push(fileName);
-  job.files.sort();
-  await writeFile(join(directory, "job.json"), JSON.stringify(job));
-  return { uploadId: job.id, uploadToken: job.mediaToken, uploadedParts: job.files.length };
+  const stagingLock = await acquireFileLock(join(directory, ".staging"));
+  try {
+    const currentJob = input.uploadId
+      ? JSON.parse(await readFile(join(directory, "job.json"), "utf8")) as StagedJob
+      : job;
+    if (!currentJob.files.includes(fileName)) currentJob.files.push(fileName);
+    currentJob.files.sort();
+    await writeFile(join(directory, "job.json"), JSON.stringify(currentJob));
+    return { uploadId: currentJob.id, uploadToken: currentJob.mediaToken, uploadedParts: currentJob.files.length };
+  } finally {
+    await stagingLock();
+  }
+}
+
+async function acquireFileLock(path: string) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      const handle = await open(path, "wx");
+      await handle.close();
+      return async () => rm(path, { force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  throw new Error("Video upload staging timed out.");
 }
 
 export async function publishStagedInstagramVideos(input: {
