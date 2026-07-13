@@ -111,7 +111,7 @@ table {
 }
 
 .shell {
-  width: min(70rem, calc(100vw - 2rem));
+  width: min(70rem, calc(100% - 2rem));
   margin: 0 auto;
   padding: 1rem 0 2rem;
 }
@@ -353,11 +353,6 @@ pre {
 }
 
 @media (max-width: 34rem) {
-  .shell {
-    width: calc(100vw - 1rem);
-    padding-top: 0.5rem;
-  }
-
   .media-summary {
     grid-template-columns: 1fr;
   }
