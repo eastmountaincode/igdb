@@ -251,7 +251,8 @@ async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
           : { is_carousel_item: "true" })
       }, accessToken);
       if (!child.id) throw graphError(child, `Instagram rejected video ${index + 1}.`);
-      await waitForContainer(child.id, accessToken);
+      console.log("[instagram-publish] child created", { jobId: job.id, requestId: job.publishRequestId, part: index + 1, containerId: child.id });
+      await waitForContainer(child.id, accessToken, `video ${index + 1}`);
       childIds.push(child.id);
     }
 
@@ -263,7 +264,7 @@ async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
         caption: job.caption
       }, accessToken);
       if (!carousel.id) throw graphError(carousel, "Instagram rejected the carousel.");
-      await waitForContainer(carousel.id, accessToken);
+      await waitForContainer(carousel.id, accessToken, "carousel");
       creationId = carousel.id;
     }
 
@@ -353,12 +354,13 @@ function encodeMonoPcm16Wav(samples: Float32Array, sampleRate: number) {
   return buffer;
 }
 
-async function waitForContainer(containerId: string, accessToken: string) {
+async function waitForContainer(containerId: string, accessToken: string, label = "video") {
   for (let attempt = 0; attempt < 90; attempt += 1) {
     const response = await graphGet(`/${containerId}`, { fields: "status_code,status" }, accessToken);
     if (response.status_code === "FINISHED") return;
     if (response.status_code === "ERROR" || response.status_code === "EXPIRED") {
-      throw graphError(response, "Instagram could not process the video.");
+      console.error("[instagram-publish] container failed", { label, containerId, response });
+      throw new Error(`Instagram could not process ${label}.`);
     }
     await new Promise((resolve) => setTimeout(resolve, 4000));
   }

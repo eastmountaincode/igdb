@@ -28,6 +28,7 @@ export const RAW_CHUNK_BYTES = Math.floor(SYMBOL_COUNT / SYMBOL_BLOCK_SIZE) * SY
 export const PAYLOAD_BYTES_PER_IMAGE = RAW_CHUNK_BYTES - HEADER_BYTES;
 export const VIDEO_FPS = 30;
 export const VIDEO_REPEAT_FRAMES = 3;
+const INSTAGRAM_MIN_VIDEO_SECONDS = 3;
 export const VIDEO_PARITY_GROUP_SIZE = 16;
 export const VIDEO_TARGET_SECONDS = 55;
 const AUDIO_PACKETS_PER_VIDEO = Math.floor(VIDEO_TARGET_SECONDS / AUDIO_PROBE_DURATION_SECONDS);
@@ -649,7 +650,8 @@ async function encodeHybridVideoSegment({
   );
   const durationSeconds = Math.max(
     (renderJobs.length * repeatFrames) / VIDEO_FPS,
-    audioPayloads.reduce((sum, payload) => sum + audioProbeDurationForByteLength(payload.length), 0)
+    audioPayloads.reduce((sum, payload) => sum + audioProbeDurationForByteLength(payload.length), 0),
+    INSTAGRAM_MIN_VIDEO_SECONDS
   );
   const visualPayloadBytes = segment.visualChunks.reduce((sum, chunk) => sum + chunk.payloadLength, 0);
   const audioPayloadBytes = segment.audioChunks.reduce((sum, chunk) => sum + chunk.payloadLength, 0);
@@ -1475,7 +1477,8 @@ async function recordChunkJobsAsMp4(
   );
   const visualFrames = jobs.length * repeatFrames;
   const visualDurationSeconds = visualFrames / fps;
-  const totalAdds = jobs.length + (audioDurationSeconds > visualDurationSeconds ? 1 : 0);
+  const targetDurationSeconds = Math.max(visualDurationSeconds, audioDurationSeconds, INSTAGRAM_MIN_VIDEO_SECONDS);
+  const totalAdds = jobs.length + (targetDurationSeconds > visualDurationSeconds ? 1 : 0);
   let completedAdds = 0;
   let currentTime = 0;
   onProgress?.({ phase: "Encoding MP4 chunks", completed: 0, total: totalAdds });
@@ -1487,9 +1490,9 @@ async function recordChunkJobsAsMp4(
     onProgress?.({ phase: "Encoding MP4 chunks", completed: completedAdds, total: totalAdds });
     await yieldToBrowser();
   }
-  if (audioDurationSeconds > currentTime) {
-    await source.add(currentTime, audioDurationSeconds - currentTime, { keyFrame: true });
-    currentTime = audioDurationSeconds;
+  if (targetDurationSeconds > currentTime) {
+    await source.add(currentTime, targetDurationSeconds - currentTime, { keyFrame: true });
+    currentTime = targetDurationSeconds;
     completedAdds++;
     onProgress?.({ phase: "Encoding MP4 chunks", completed: completedAdds, total: totalAdds });
   }
