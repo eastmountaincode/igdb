@@ -132,8 +132,6 @@ export function InstagramPixelDbApp() {
   function handleCoverSelection(event: ChangeEvent<HTMLInputElement>) {
     setCoverMedia(event.target.files?.[0] ?? null);
     setCoverVideo(null);
-    encodedVideos.forEach((video) => URL.revokeObjectURL(video.url));
-    setEncodedVideos([]);
     setPublishMessage("");
     setPublishedUrl("");
   }
