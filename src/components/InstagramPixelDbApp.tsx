@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import {
   decodeVideoFile,
   downloadBlob,
@@ -27,8 +27,9 @@ export function InstagramPixelDbApp() {
   const [encodeProgress, setEncodeProgress] = useState<EncodeVideoProgress | null>(null);
   const [decodeProgress, setDecodeProgress] = useState<DecodeVideoProgress | null>(null);
   const [isDecodingVideo, setIsDecodingVideo] = useState(false);
+  const [readUrl, setReadUrl] = useState("");
+  const [isFetchingReadUrl, setIsFetchingReadUrl] = useState(false);
   const [isFileDragActive, setIsFileDragActive] = useState(false);
-  const [isVideoDragActive, setIsVideoDragActive] = useState(false);
   const [publishNote, setPublishNote] = useState("");
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishMessage, setPublishMessage] = useState("");
@@ -110,31 +111,41 @@ export function InstagramPixelDbApp() {
     }
   }
 
-  async function handleDecodeVideoSelection(event: ChangeEvent<HTMLInputElement>) {
-    await decodeVideoFiles([...(event.target.files ?? [])]);
-  }
-
-  function handleVideoDrag(event: DragEvent<HTMLLabelElement>) {
+  async function handleReadUrl(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (event.dataTransfer.types.includes("Files")) {
-      setIsVideoDragActive(true);
+    const url = readUrl.trim();
+    if (!url || isFetchingReadUrl || isDecodingVideo) return;
+    resetDecode();
+    setIsFetchingReadUrl(true);
+    setDecodeMessages(["Resolving Instagram URL..."]);
+    try {
+      const response = await fetch("/api/instagram/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ url })
+      });
+      const result = await readJsonResponse(response);
+      if (!response.ok || !result.parts) throw new Error(result.error || "Instagram URL could not be read.");
+      const videos: File[] = [];
+      for (let part = 0; part < result.parts; part += 1) {
+        setDecodeMessages([`Downloading video ${part + 1} of ${result.parts}...`]);
+        const videoResponse = await fetch(`/api/instagram/read?url=${encodeURIComponent(url)}&part=${part}`);
+        if (!videoResponse.ok) {
+          const error = await readJsonResponse(videoResponse);
+          throw new Error(error.error || `Video ${part + 1} could not be downloaded.`);
+        }
+        const blob = await videoResponse.blob();
+        videos.push(new File([blob], `instagram-${part + 1}.mp4`, { type: "video/mp4" }));
+      }
+      await decodeVideoFiles(videos, true);
+    } catch (error) {
+      setDecodeMessages([error instanceof Error ? error.message : "Instagram URL could not be read."]);
+    } finally {
+      setIsFetchingReadUrl(false);
     }
   }
 
-  function handleVideoDragLeave(event: DragEvent<HTMLLabelElement>) {
-    event.preventDefault();
-    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-      setIsVideoDragActive(false);
-    }
-  }
-
-  async function handleVideoDrop(event: DragEvent<HTMLLabelElement>) {
-    event.preventDefault();
-    setIsVideoDragActive(false);
-    await decodeVideoFiles([...event.dataTransfer.files]);
-  }
-
-  async function decodeVideoFiles(files: File[]) {
+  async function decodeVideoFiles(files: File[], downloadWhenComplete = false) {
     const videos = files.filter((file) => file.type.startsWith("video/") || file.name.toLowerCase().endsWith(".mp4"));
     resetDecode();
     if (!videos.length) return;
@@ -142,6 +153,7 @@ export function InstagramPixelDbApp() {
     setIsDecodingVideo(true);
     const recoveredByIndex = new Map<number, DecodeResult>();
     const messages: string[] = [];
+    let mergedChunks: DecodeResult[] = [];
     try {
       for (let index = 0; index < videos.length; index++) {
         const file = videos[index];
@@ -164,7 +176,7 @@ export function InstagramPixelDbApp() {
         for (const chunk of recoveredChunks) {
           if (!recoveredByIndex.has(chunk.chunkIndex)) recoveredByIndex.set(chunk.chunkIndex, chunk);
         }
-        const mergedChunks = [...recoveredByIndex.values()].sort((left, right) => left.chunkIndex - right.chunkIndex);
+        mergedChunks = [...recoveredByIndex.values()].sort((left, right) => left.chunkIndex - right.chunkIndex);
         setDecodedChunks(mergedChunks);
         messages.push(
           `${file.name}: recovered ${chunks.length ? `${recoveredChunks.length}/${chunks[0].totalChunks}` : "0"} chunks; merged ${mergedChunks.length}.`
@@ -172,6 +184,18 @@ export function InstagramPixelDbApp() {
         setDecodeMessages([...messages]);
       }
       setDecodeProgress({ phase: "Decode complete", completed: videos.length, total: videos.length });
+      const totalChunks = mergedChunks[0]?.totalChunks ?? 0;
+      if (downloadWhenComplete && totalChunks > 0 && mergedChunks.length === totalChunks) {
+        const assembled = await reassemble(mergedChunks);
+        if (!assembled.hashOk) throw new Error("Recovered file failed SHA-256 verification.");
+        downloadBlob(assembled.blob, assembled.fileName);
+        setDecodeMessages((current) => [
+          ...current,
+          `Downloaded ${assembled.fileName}. SHA-256 OK.`
+        ]);
+      } else if (downloadWhenComplete) {
+        throw new Error(`Only ${mergedChunks.length}/${totalChunks || "?"} chunks were recovered.`);
+      }
     } catch (error) {
       setDecodeMessages([...messages, `Video decode failed: ${error instanceof Error ? error.message : String(error)}`]);
       setDecodeProgress({ phase: "Decode failed", completed: 1, total: 1 });
@@ -272,19 +296,26 @@ export function InstagramPixelDbApp() {
       {activeTab === "read" ? (
         <section className="tab-panel read-layout">
           <fieldset className="panel read-source">
-            <legend>read video</legend>
-            <label
-              className={`dropzone video-dropzone${isVideoDragActive ? " drag-active" : ""}`}
-              htmlFor="video-decode-input"
-              onDragEnter={handleVideoDrag}
-              onDragOver={handleVideoDrag}
-              onDragLeave={handleVideoDragLeave}
-              onDrop={handleVideoDrop}
-            >
-              <input id="video-decode-input" type="file" accept="video/*,.mp4" multiple onChange={handleDecodeVideoSelection} />
-              <span>choose MP4</span>
-              <strong>{expectedChunks ? `${recoveredChunks} / ${expectedChunks} chunks recovered` : "no video selected"}</strong>
-            </label>
+            <legend>read</legend>
+            <form onSubmit={handleReadUrl}>
+              <label className="field-label" htmlFor="instagram-read-url">
+                Instagram URL
+                <input
+                  id="instagram-read-url"
+                  type="url"
+                  inputMode="url"
+                  required
+                  placeholder="https://www.instagram.com/reel/.../"
+                  value={readUrl}
+                  onChange={(event) => setReadUrl(event.target.value)}
+                />
+              </label>
+              <div className="button-row">
+                <button type="submit" disabled={!readUrl.trim() || isFetchingReadUrl || isDecodingVideo}>
+                  {isFetchingReadUrl ? "downloading..." : isDecodingVideo ? "decoding..." : "read URL"}
+                </button>
+              </div>
+            </form>
           </fieldset>
 
           <fieldset className="panel">

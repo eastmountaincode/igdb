@@ -35,6 +35,8 @@ Do not put Instagram credentials or browser session data in Git. Require a final
 
 The API branch publishes only to `@normal_shopkeep`. It reads `INSTAGRAM_ACCESS_TOKEN_NORMAL_SHOPKEEP` on the server and requires a public HTTPS origin (or `INSTAGRAM_MEDIA_BASE_URL`) so Meta can fetch staged MP4s. The UI builds captions from original file name, MIME type, size, and an optional note.
 
+The Read page accepts an Instagram post or Reel URL from `@normal_shopkeep`. Zo resolves and proxies its ordered video parts through the authorized Instagram API, the existing browser decoder reconstructs and SHA-256 verifies the source, and the recovered file downloads directly. Never expose Instagram CDN URLs or the account token to the browser.
+
 The published service sources `/root/.zo_secrets` at startup so the Instagram token remains outside the repository. Keep `INSTAGRAM_MEDIA_BASE_URL` pointed at the public Zo Site URL.
 
 ## Commands
