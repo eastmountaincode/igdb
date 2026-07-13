@@ -475,7 +475,7 @@ export function InstagramPixelDbApp() {
                   />
                 ) : (
                   <div className="display-video display-video-placeholder" aria-label="Display video not generated">
-                    {isEncodingDisplayVideo ? "preparing preview..." : "choose a file"}
+                    {isEncodingDisplayVideo ? "preparing preview..." : null}
                   </div>
                 )}
               </div>
