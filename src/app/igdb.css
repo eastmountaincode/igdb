@@ -61,8 +61,7 @@ button:disabled {
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
-a:focus-visible,
-.dropzone:focus-within {
+a:focus-visible {
   outline: 1px dotted #000;
   outline-offset: 2px;
 }
@@ -214,6 +213,16 @@ table {
   border: 1px solid #000;
   padding: 0.125rem 0.5rem;
   background: #efefef;
+  user-select: none;
+}
+
+.file-picker-button:active {
+  background: #ddd;
+}
+
+.dropzone:has(input:focus-visible) .file-picker-button {
+  outline: 1px dotted #000;
+  outline-offset: 2px;
 }
 
 .file-picker-action {
