@@ -125,6 +125,24 @@ type Header = {
   parityLastMemberLength?: number;
 };
 
+type CompactHeader = {
+  v: 2;
+  k: "d" | "x";
+  n: string;
+  m: string;
+  s: number;
+  h: string;
+  i: number;
+  t: number;
+  l: number;
+  c: number;
+  a?: number[];
+  b?: number[];
+  p?: number;
+  q?: number;
+  r?: number;
+};
+
 type ChunkKind = "data" | "xor";
 type FrameSource = HTMLCanvasElement | ImageBitmap;
 
@@ -1000,7 +1018,7 @@ function decodeChunkBytes(allBytes: Uint8Array): DecodeResult {
   const headerLength = readUint16(allBytes, 5);
   if (headerLength <= 0 || headerLength > HEADER_BYTES - 7) throw new Error("Invalid video payload header.");
   const headerJson = decoder.decode(allBytes.slice(7, 7 + headerLength));
-  const header = JSON.parse(headerJson) as Header;
+  const header = normalizeHeader(JSON.parse(headerJson) as Header | CompactHeader);
   const payloadStart = HEADER_BYTES;
   const payload = allBytes.slice(payloadStart, payloadStart + header.payloadLength);
   const crcOk = crc32(payload) === header.chunkCrc;
@@ -1729,7 +1747,10 @@ function seekVideo(video: HTMLVideoElement, time: number) {
 }
 
 function packChunk(header: Header, payload: Uint8Array) {
-  const headerJson = encoder.encode(JSON.stringify(header));
+  const legacyHeaderJson = encoder.encode(JSON.stringify(header));
+  const headerJson = legacyHeaderJson.length <= HEADER_BYTES - 7
+    ? legacyHeaderJson
+    : encoder.encode(JSON.stringify(compactHeader(header)));
   if (headerJson.length > HEADER_BYTES - 7) {
     throw new Error("Header is too large for this codec. Use a shorter file name.");
   }
@@ -1740,6 +1761,46 @@ function packChunk(header: Header, payload: Uint8Array) {
   out.set(headerJson, 7);
   out.set(payload, HEADER_BYTES);
   return out;
+}
+
+function compactHeader(header: Header): CompactHeader {
+  return {
+    v: 2,
+    k: header.kind === "xor" ? "x" : "d",
+    n: header.fileName,
+    m: header.mimeType,
+    s: header.fileSize,
+    h: header.fileHash,
+    i: header.chunkIndex,
+    t: header.totalChunks,
+    l: header.payloadLength,
+    c: header.chunkCrc,
+    a: header.parityMemberIndexes,
+    b: header.parityMemberLengths,
+    p: header.parityStartIndex,
+    q: header.parityMemberCount,
+    r: header.parityLastMemberLength
+  };
+}
+
+function normalizeHeader(header: Header | CompactHeader): Header {
+  if (!("v" in header)) return header;
+  return {
+    kind: header.k === "x" ? "xor" : "data",
+    fileName: header.n,
+    mimeType: header.m,
+    fileSize: header.s,
+    fileHash: header.h,
+    chunkIndex: header.i,
+    totalChunks: header.t,
+    payloadLength: header.l,
+    chunkCrc: header.c,
+    parityMemberIndexes: header.a,
+    parityMemberLengths: header.b,
+    parityStartIndex: header.p,
+    parityMemberCount: header.q,
+    parityLastMemberLength: header.r
+  };
 }
 
 function bytesToSymbols(bytes: Uint8Array) {

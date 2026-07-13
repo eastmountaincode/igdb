@@ -24,6 +24,24 @@ type Header = {
   parityLastMemberLength?: number;
 };
 
+type CompactHeader = {
+  v: 2;
+  k: "d" | "x";
+  n: string;
+  m: string;
+  s: number;
+  h: string;
+  i: number;
+  t: number;
+  l: number;
+  c: number;
+  a?: number[];
+  b?: number[];
+  p?: number;
+  q?: number;
+  r?: number;
+};
+
 type WorkerCodecProfile = {
   canvasSize: number;
   cellSize: number;
@@ -98,7 +116,7 @@ function decodeChunkBytes(profile: WorkerCodecProfile, allBytes: Uint8Array): De
   const headerLength = readUint16(allBytes, 5);
   if (headerLength <= 0 || headerLength > profile.headerBytes - 7) throw new Error("Invalid video payload header.");
   const headerJson = decoder.decode(allBytes.slice(7, 7 + headerLength));
-  const header = JSON.parse(headerJson) as Header;
+  const header = normalizeHeader(JSON.parse(headerJson) as Header | CompactHeader);
   const payloadStart = profile.headerBytes;
   const payload = allBytes.slice(payloadStart, payloadStart + header.payloadLength);
   const crcOk = crc32(payload) === header.chunkCrc;
@@ -118,6 +136,26 @@ function decodeChunkBytes(profile: WorkerCodecProfile, allBytes: Uint8Array): De
     message: crcOk ? "decoded" : "decoded with checksum mismatch",
     parityMemberIndexes: parityMembers.indexes,
     parityMemberLengths: parityMembers.lengths
+  };
+}
+
+function normalizeHeader(header: Header | CompactHeader): Header {
+  if (!("v" in header)) return header;
+  return {
+    kind: header.k === "x" ? "xor" : "data",
+    fileName: header.n,
+    mimeType: header.m,
+    fileSize: header.s,
+    fileHash: header.h,
+    chunkIndex: header.i,
+    totalChunks: header.t,
+    payloadLength: header.l,
+    chunkCrc: header.c,
+    parityMemberIndexes: header.a,
+    parityMemberLengths: header.b,
+    parityStartIndex: header.p,
+    parityMemberCount: header.q,
+    parityLastMemberLength: header.r
   };
 }
 

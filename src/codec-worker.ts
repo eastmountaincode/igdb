@@ -24,6 +24,24 @@ type Header = {
   parityLastMemberLength?: number;
 };
 
+type CompactHeader = {
+  v: 2;
+  k: "d" | "x";
+  n: string;
+  m: string;
+  s: number;
+  h: string;
+  i: number;
+  t: number;
+  l: number;
+  c: number;
+  a?: number[];
+  b?: number[];
+  p?: number;
+  q?: number;
+  r?: number;
+};
+
 type WorkerCodecProfile = {
   canvasSize: number;
   cellSize: number;
@@ -90,7 +108,10 @@ function encodeChunk(profile: WorkerCodecProfile, header: Header, payload: Uint8
 }
 
 function packChunk(profile: WorkerCodecProfile, header: Header, payload: Uint8Array) {
-  const headerJson = encoder.encode(JSON.stringify(header));
+  const legacyHeaderJson = encoder.encode(JSON.stringify(header));
+  const headerJson = legacyHeaderJson.length <= profile.headerBytes - 7
+    ? legacyHeaderJson
+    : encoder.encode(JSON.stringify(compactHeader(header)));
   if (headerJson.length > profile.headerBytes - 7) {
     throw new Error("Header is too large for this codec. Use a shorter file name.");
   }
@@ -101,6 +122,26 @@ function packChunk(profile: WorkerCodecProfile, header: Header, payload: Uint8Ar
   out.set(headerJson, 7);
   out.set(payload, profile.headerBytes);
   return out;
+}
+
+function compactHeader(header: Header): CompactHeader {
+  return {
+    v: 2,
+    k: header.kind === "xor" ? "x" : "d",
+    n: header.fileName,
+    m: header.mimeType,
+    s: header.fileSize,
+    h: header.fileHash,
+    i: header.chunkIndex,
+    t: header.totalChunks,
+    l: header.payloadLength,
+    c: header.chunkCrc,
+    a: header.parityMemberIndexes,
+    b: header.parityMemberLengths,
+    p: header.parityStartIndex,
+    q: header.parityMemberCount,
+    r: header.parityLastMemberLength
+  };
 }
 
 function bytesToSymbols(profile: WorkerCodecProfile, bytes: Uint8Array) {

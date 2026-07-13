@@ -32,6 +32,7 @@ export function InstagramPixelDbApp() {
   const [decodedChunks, setDecodedChunks] = useState<DecodeResult[]>([]);
   const [decodeMessages, setDecodeMessages] = useState<string[]>([]);
   const [isEncodingVideo, setIsEncodingVideo] = useState(false);
+  const [encodeError, setEncodeError] = useState("");
   const [encodeProgress, setEncodeProgress] = useState<EncodeVideoProgress | null>(null);
   const [decodeProgress, setDecodeProgress] = useState<DecodeVideoProgress | null>(null);
   const [isDecodingVideo, setIsDecodingVideo] = useState(false);
@@ -110,6 +111,7 @@ export function InstagramPixelDbApp() {
     setCoverVideo(null);
     encodedVideos.forEach((video) => URL.revokeObjectURL(video.url));
     setEncodedVideos([]);
+    setEncodeError("");
     setPublishMessage("");
     setPublishedUrl("");
     setPublishRequestId(file ? crypto.randomUUID() : "");
@@ -146,6 +148,7 @@ export function InstagramPixelDbApp() {
 
   async function generateVideoForFile(file: File) {
     resetDecode();
+    setEncodeError("");
     setIsEncodingVideo(true);
     setEncodeProgress({ phase: "Starting", completed: 0, total: 1 });
     encodedVideos.forEach((video) => URL.revokeObjectURL(video.url));
@@ -158,7 +161,7 @@ export function InstagramPixelDbApp() {
       setEncodedVideos(videos);
       setEncodeProgress({ phase: videos.length > 1 ? "MP4 set ready" : "MP4 ready", completed: videos.length, total: videos.length });
     } catch (error) {
-      setDecodeMessages([`Video encode failed: ${error instanceof Error ? error.message : String(error)}`]);
+      setEncodeError(error instanceof Error ? error.message : String(error));
       setEncodeProgress(null);
     } finally {
       setIsEncodingVideo(false);
@@ -479,6 +482,7 @@ export function InstagramPixelDbApp() {
             </div>
 
             {encodeProgress ? <ProgressView progress={encodeProgress} active={isEncodingVideo} label="Encoding progress" /> : null}
+            {encodeError ? <p className="file-error" role="alert">MP4 generation failed: {encodeError}</p> : null}
 
           </fieldset>
 
