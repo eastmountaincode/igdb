@@ -98,38 +98,61 @@ function composeGifFrames(frames: ParsedFrame[], width: number, height: number) 
 function drawCoverFrame(context: CanvasRenderingContext2D, gifFrame: HTMLCanvasElement, metadata: InstagramFileMetadata, hasGif: boolean) {
   context.fillStyle = "#000";
   context.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-  const maxWidth = 520;
-  const maxHeight = 340;
+
+  const margin = 80;
+  const contentWidth = CANVAS_SIZE - margin * 2;
+  const fontSize = 38;
+  const lineHeight = 48;
+  const sectionGap = 14;
+  const font = `${fontSize}px "Redaction 35", "Times New Roman", Times, serif`;
+  context.font = font;
+  const sections = [
+    wrapText(context, metadata.name, contentWidth),
+    wrapText(context, metadata.type || "application/octet-stream", contentWidth),
+    wrapText(context, formatCaptionBytes(metadata.size), contentWidth)
+  ];
+  const textHeight = sections.reduce((total, lines) => total + lines.length * lineHeight, 0) + sectionGap * (sections.length - 1);
+  const contentHeight = CANVAS_SIZE - margin * 2;
+  const mediaGap = hasGif ? 36 : 0;
+  const gifHeight = hasGif ? Math.max(0, Math.min(300, contentHeight - textHeight - mediaGap)) : 0;
+  const combinedHeight = gifHeight + mediaGap + textHeight;
+  let cursorY = margin + Math.max(0, (contentHeight - combinedHeight) / 2);
+
   if (hasGif) {
-    const scale = Math.min(maxWidth / gifFrame.width, maxHeight / gifFrame.height);
+    const scale = Math.min(contentWidth / gifFrame.width, gifHeight / gifFrame.height);
     const width = Math.max(1, Math.round(gifFrame.width * scale));
     const height = Math.max(1, Math.round(gifFrame.height * scale));
     context.imageSmoothingEnabled = false;
-    context.drawImage(gifFrame, Math.round((CANVAS_SIZE - width) / 2), 70 + Math.round((maxHeight - height) / 2), width, height);
+    context.drawImage(gifFrame, Math.round((CANVAS_SIZE - width) / 2), cursorY + Math.round((gifHeight - height) / 2), width, height);
+    cursorY += gifHeight + mediaGap;
   }
 
   context.fillStyle = "#fff";
   context.textBaseline = "top";
-  const lines = [
-    `File name: ${metadata.name}`,
-    `File type: ${metadata.type || "application/octet-stream"}`,
-    `File size: ${formatCaptionBytes(metadata.size)}`
-  ];
-  lines.forEach((line, index) => {
-    context.font = fitFont(context, line, 560, hasGif ? 30 : 38);
-    context.fillText(line, 80, (hasGif ? 470 : 270) + index * (hasGif ? 48 : 64));
+  context.font = font;
+  sections.forEach((lines, sectionIndex) => {
+    lines.forEach((line) => {
+      context.fillText(line, margin, cursorY);
+      cursorY += lineHeight;
+    });
+    if (sectionIndex < sections.length - 1) cursorY += sectionGap;
   });
 }
 
-function fitFont(context: CanvasRenderingContext2D, text: string, maxWidth: number, startingSize: number) {
-  let size = startingSize;
-  while (size > 16) {
-    const font = `${size}px "Redaction 35", "Times New Roman", Times, serif`;
-    context.font = font;
-    if (context.measureText(text).width <= maxWidth) return font;
-    size -= 1;
+function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const lines: string[] = [];
+  let remaining = text.trim();
+  while (remaining) {
+    let end = remaining.length;
+    while (end > 1 && context.measureText(remaining.slice(0, end)).width > maxWidth) end -= 1;
+    if (end < remaining.length) {
+      const breakAt = remaining.slice(0, end + 1).lastIndexOf(" ");
+      if (breakAt > 0) end = breakAt;
+    }
+    lines.push(remaining.slice(0, end).trimEnd());
+    remaining = remaining.slice(end).trimStart();
   }
-  return `16px "Redaction 35", "Times New Roman", Times, serif`;
+  return lines.length ? lines : [""];
 }
 
 function blankFrame() {
