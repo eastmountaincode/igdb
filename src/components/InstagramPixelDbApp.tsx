@@ -80,25 +80,9 @@ export function InstagramPixelDbApp() {
       );
     }
 
-    function handleWindowFocus() {
-      if (!filePickerPendingRef.current) return;
-      window.setTimeout(() => {
-        if (!filePickerPendingRef.current) return;
-        const input = document.getElementById("file-input") as HTMLInputElement | null;
-        if (!input?.files?.length) {
-          filePickerPendingRef.current = false;
-          setFileSelectionMessage(
-            "No file was selected. If you chose a file, its filename may be too long for Zo to transfer. Shorten the filename and try again."
-          );
-        }
-      }, 300);
-    }
-
     input?.addEventListener("cancel", handlePickerCancel);
-    window.addEventListener("focus", handleWindowFocus);
     return () => {
       input?.removeEventListener("cancel", handlePickerCancel);
-      window.removeEventListener("focus", handleWindowFocus);
     };
   }, []);
 
@@ -176,21 +160,21 @@ export function InstagramPixelDbApp() {
     setPublishedUrl("");
   }
 
-  function handleFileDrag(event: DragEvent<HTMLLabelElement>) {
+  function handleFileDrag(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     if (event.dataTransfer.types.includes("Files")) {
       setIsFileDragActive(true);
     }
   }
 
-  function handleFileDragLeave(event: DragEvent<HTMLLabelElement>) {
+  function handleFileDragLeave(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
       setIsFileDragActive(false);
     }
   }
 
-  function handleFileDrop(event: DragEvent<HTMLLabelElement>) {
+  function handleFileDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setIsFileDragActive(false);
     selectFile(event.dataTransfer.files?.[0] ?? null);
@@ -498,30 +482,24 @@ export function InstagramPixelDbApp() {
             <legend>write</legend>
             <p className="file-limit">maximum file size: {activeFileLimitLabel}</p>
             <p className="file-limit">write speed: {WRITE_SPEED_LABEL}</p>
-            <label
+            <div
               className={`dropzone${isFileDragActive ? " drag-active" : ""}`}
-              htmlFor="file-input"
               onDragEnter={handleFileDrag}
               onDragOver={handleFileDrag}
               onDragLeave={handleFileDragLeave}
               onDrop={handleFileDrop}
             >
-              <input
-                id="file-input"
-                type="file"
-                onClick={handleFilePickerOpen}
-                onChange={handleFileSelection}
-              />
               <span className="file-picker-action">
-                <span className="file-picker-button">choose file</span>
+                <input
+                  id="file-input"
+                  type="file"
+                  onClick={handleFilePickerOpen}
+                  onChange={handleFileSelection}
+                />
                 {nextWriteStep === "choose-file" ? <span className="next-step-arrow" aria-hidden="true">←</span> : null}
               </span>
-                <strong>
-                  {selectedFile
-                    ? `${selectedFile.name} (${formatBytes(selectedFile.size)})`
-                    : "no file selected"}
-                </strong>
-              </label>
+              {selectedFile ? <strong>{selectedFile.name} ({formatBytes(selectedFile.size)})</strong> : null}
+            </div>
 
             {fileTooLarge ? <p className="file-error" role="alert">file exceeds the {activeFileLimitLabel} maximum</p> : null}
             {fileSelectionMessage ? <p className="file-error" role="alert">{fileSelectionMessage}</p> : null}
@@ -565,14 +543,13 @@ export function InstagramPixelDbApp() {
                   </div>
                 )}
               </div>
-              <label className="field-label" htmlFor="cover-media-input">
-                GIF/image (optional)
-                <span className="dropzone compact-picker">
+              <div className="field-label">
+                <label htmlFor="cover-media-input">GIF/image (optional)</label>
+                <div className="dropzone compact-picker">
                   <input id="cover-media-input" type="file" accept="image/*" onChange={handleCoverSelection} />
-                  <span className="file-picker-button">choose file</span>
-                  <strong>{coverMedia?.name ?? "no file selected"}</strong>
-                </span>
-              </label>
+                  {coverMedia ? <strong>{coverMedia.name}</strong> : null}
+                </div>
+              </div>
               <label className="field-label" htmlFor="instagram-note">
                 caption note (optional)
                 <textarea
