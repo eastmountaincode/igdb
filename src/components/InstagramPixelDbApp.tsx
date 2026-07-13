@@ -325,7 +325,7 @@ export function InstagramPixelDbApp() {
         uploadId = uploadResult.uploadId;
         uploadToken = uploadResult.uploadToken;
       }
-      setPublishMessage("Publishing to @normal_shopkeep...");
+      setPublishMessage("Publishing to Normal Shopkeep\u2026 Keep this window open.");
       const requestId = publishRequestId || crypto.randomUUID();
       const publishBody = {
         uploadId,
