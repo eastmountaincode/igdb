@@ -197,11 +197,24 @@ table {
   opacity: 0;
 }
 
-.dropzone span {
+.file-picker-button {
   width: fit-content;
   border: 1px solid #000;
   padding: 0.125rem 0.5rem;
   background: #efefef;
+}
+
+.file-picker-action {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: fit-content;
+}
+
+.next-step-arrow {
+  display: inline-block;
+  font-weight: bold;
+  line-height: 1;
 }
 
 .dropzone strong,
@@ -220,6 +233,7 @@ dd {
 
 .button-row {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 0.35rem;
   margin-top: 0.65rem;

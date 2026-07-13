@@ -46,6 +46,14 @@ export function InstagramPixelDbApp() {
   const activeFileLimit = MAX_SOURCE_FILE_WITH_COVER_BYTES;
   const activeFileLimitLabel = MAX_SOURCE_FILE_WITH_COVER_LABEL;
   const fileTooLarge = Boolean(selectedFile && selectedFile.size > activeFileLimit);
+  const publishSucceeded = publishMessage.startsWith("Published");
+  const nextWriteStep = isEncodingVideo || isEncodingDisplayVideo || isPublishing || publishSucceeded
+    ? null
+    : !selectedFile || fileTooLarge
+      ? "choose-file"
+      : encodedVideos.length === 0
+        ? "generate-mp4"
+        : "publish-instagram";
 
   useEffect(() => {
     if (!coverVideo) {
@@ -426,7 +434,10 @@ export function InstagramPixelDbApp() {
               onDrop={handleFileDrop}
             >
               <input id="file-input" type="file" onChange={handleFileSelection} />
-              <span>choose file</span>
+              <span className="file-picker-action">
+                <span className="file-picker-button">choose file</span>
+                {nextWriteStep === "choose-file" ? <span className="next-step-arrow" aria-hidden="true">←</span> : null}
+              </span>
                 <strong>
                   {selectedFile
                     ? `${selectedFile.name} (${formatBytes(selectedFile.size)})`
@@ -444,6 +455,7 @@ export function InstagramPixelDbApp() {
               >
                 {isEncodingVideo ? "encoding..." : isEncodingDisplayVideo ? "preparing preview..." : "generate MP4"}
               </button>
+              {nextWriteStep === "generate-mp4" ? <span className="next-step-arrow" aria-hidden="true">←</span> : null}
             </div>
 
             {encodeProgress ? <ProgressView progress={encodeProgress} active={isEncodingVideo} label="Encoding progress" /> : null}
@@ -477,7 +489,7 @@ export function InstagramPixelDbApp() {
                 GIF/image (optional)
                 <span className="dropzone compact-picker">
                   <input id="cover-media-input" type="file" accept="image/*" onChange={handleCoverSelection} />
-                  <span>choose file</span>
+                  <span className="file-picker-button">choose file</span>
                   <strong>{coverMedia?.name ?? "no file selected"}</strong>
                 </span>
               </label>
@@ -500,6 +512,7 @@ export function InstagramPixelDbApp() {
                 >
                   {isPublishing ? "publishing..." : "publish to Instagram"}
                 </button>
+                {nextWriteStep === "publish-instagram" ? <span className="next-step-arrow" aria-hidden="true">←</span> : null}
               </div>
 
               {publishMessage ? <p className="publish-status" role="status">{publishMessage}</p> : null}
