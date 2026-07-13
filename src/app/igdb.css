@@ -292,8 +292,12 @@ dt {
 }
 
 .display-video-placeholder {
+  display: grid;
+  place-items: center;
   aspect-ratio: 1;
   background: #000;
+  color: #fff;
+  font-family: "Los Angeles", "Times New Roman", Times, serif;
 }
 
 .compact-picker {

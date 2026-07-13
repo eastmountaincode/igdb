@@ -28,6 +28,7 @@ export function InstagramPixelDbApp() {
   const [coverGif, setCoverGif] = useState<File | null>(null);
   const [coverVideo, setCoverVideo] = useState<Blob | null>(null);
   const [coverVideoUrl, setCoverVideoUrl] = useState("");
+  const [isEncodingDisplayVideo, setIsEncodingDisplayVideo] = useState(false);
   const [encodedVideos, setEncodedVideos] = useState<EncodedVideo[]>([]);
   const [decodedChunks, setDecodedChunks] = useState<DecodeResult[]>([]);
   const [decodeMessages, setDecodeMessages] = useState<string[]>([]);
@@ -72,6 +73,31 @@ export function InstagramPixelDbApp() {
     setCoverVideoUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [coverVideo]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedFile) {
+      setCoverVideo(null);
+      setIsEncodingDisplayVideo(false);
+      return;
+    }
+    setCoverVideo(null);
+    setIsEncodingDisplayVideo(true);
+    void encodeGifCoverVideo(coverGif, {
+      name: selectedFile.name,
+      type: selectedFile.type || "application/octet-stream",
+      size: selectedFile.size
+    }).then((video) => {
+      if (!cancelled) setCoverVideo(video);
+    }).catch((error) => {
+      if (!cancelled) setDecodeMessages([`Display video failed: ${error instanceof Error ? error.message : String(error)}`]);
+    }).finally(() => {
+      if (!cancelled) setIsEncodingDisplayVideo(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFile, coverGif]);
 
   const recoveredChunks = decodedChunks.filter((chunk) => chunk.ok && chunk.kind === "data").length;
   const expectedChunks = decodedChunks[0]?.totalChunks ?? 0;
@@ -133,19 +159,12 @@ export function InstagramPixelDbApp() {
     setEncodeProgress({ phase: "Starting", completed: 0, total: 1 });
     encodedVideos.forEach((video) => URL.revokeObjectURL(video.url));
     setEncodedVideos([]);
-    setCoverVideo(null);
     try {
       const videos = await encodeFileAsVideos(file, setEncodeProgress);
       if (videos.length >= 8) {
         throw new Error("This file needs all eight carousel videos. Choose a file 25 MB or smaller so the display video fits first.");
       }
-      const nextCoverVideo = await encodeGifCoverVideo(coverGif, {
-            name: file.name,
-            type: file.type || "application/octet-stream",
-            size: file.size
-          }, setEncodeProgress);
       setEncodedVideos(videos);
-      setCoverVideo(nextCoverVideo);
       setEncodeProgress({ phase: videos.length > 1 ? "MP4 set ready" : "MP4 ready", completed: videos.length, total: videos.length });
     } catch (error) {
       setDecodeMessages([`Video encode failed: ${error instanceof Error ? error.message : String(error)}`]);
@@ -430,9 +449,9 @@ export function InstagramPixelDbApp() {
               <button
                 type="button"
                 onClick={() => selectedFile && generateVideoForFile(selectedFile)}
-                disabled={!selectedFile || fileTooLarge || isEncodingVideo}
+                disabled={!selectedFile || fileTooLarge || isEncodingVideo || isEncodingDisplayVideo || !coverVideo}
               >
-                {isEncodingVideo ? "encoding..." : "generate MP4"}
+                {isEncodingVideo ? "encoding..." : isEncodingDisplayVideo ? "preparing preview..." : "generate MP4"}
               </button>
             </div>
 
@@ -455,7 +474,9 @@ export function InstagramPixelDbApp() {
                     aria-label="Generated Instagram display video"
                   />
                 ) : (
-                  <div className="display-video display-video-placeholder" aria-label="Display video not generated" />
+                  <div className="display-video display-video-placeholder" aria-label="Display video not generated">
+                    {isEncodingDisplayVideo ? "preparing preview..." : "choose a file"}
+                  </div>
                 )}
               </div>
               <label className="field-label" htmlFor="cover-gif-input">
