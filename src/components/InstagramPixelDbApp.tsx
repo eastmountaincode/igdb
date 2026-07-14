@@ -55,6 +55,7 @@ export function InstagramPixelDbApp() {
   const activeFileLimit = MAX_SOURCE_FILE_WITH_COVER_BYTES;
   const activeFileLimitLabel = MAX_SOURCE_FILE_WITH_COVER_LABEL;
   const fileTooLarge = Boolean(selectedFile && selectedFile.size > activeFileLimit);
+  const normalizedReadUrl = normalizeReadUrl(readUrl);
   const publishSucceeded = publishMessage.startsWith("Published");
   const nextWriteStep = isEncodingVideo || isEncodingDisplayVideo || isPublishing || publishSucceeded
     ? null
@@ -63,6 +64,14 @@ export function InstagramPixelDbApp() {
       : encodedVideos.length === 0
         ? "generate-mp4"
         : "publish-instagram";
+
+  useEffect(() => {
+    const sharedUrl = new URLSearchParams(window.location.search).get("read");
+    const normalized = normalizeReadUrl(sharedUrl ?? "");
+    if (!normalized) return;
+    setReadUrl(normalized);
+    setActiveTab("read");
+  }, []);
 
   useEffect(() => {
     if (!coverVideo) {
@@ -189,7 +198,7 @@ export function InstagramPixelDbApp() {
 
   async function handleReadUrl(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const url = readUrl.trim();
+    const url = normalizeReadUrl(readUrl);
     if (!url || isFetchingReadUrl || isDecodingVideo) return;
     resetDecode();
     setIsFetchingReadUrl(true);
@@ -470,9 +479,12 @@ export function InstagramPixelDbApp() {
                 />
               </label>
               <div className="button-row">
-                <button type="submit" disabled={!readUrl.trim() || isFetchingReadUrl || isDecodingVideo}>
+                <button type="submit" disabled={!normalizedReadUrl || isFetchingReadUrl || isDecodingVideo}>
                   {isFetchingReadUrl ? "downloading..." : isDecodingVideo ? "decoding..." : "read URL"}
                 </button>
+                {normalizedReadUrl && !isFetchingReadUrl && !isDecodingVideo && !recoveredFile
+                  ? <span className="next-step-arrow" aria-hidden="true">←</span>
+                  : null}
               </div>
             </form>
           </fieldset>
@@ -608,12 +620,34 @@ export function InstagramPixelDbApp() {
                 </dl>
               ) : null}
               {publishedUrl ? <a className="published-link" href={publishedUrl} target="_blank" rel="noreferrer">open Instagram post</a> : null}
+              {publishedUrl ? (
+                <a
+                  className="published-link"
+                  href={`/?read=${encodeURIComponent(publishedUrl)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  open read link
+                </a>
+              ) : null}
           </fieldset>
         </section>
       )}
       </main>
     </div>
   );
+}
+
+function normalizeReadUrl(input: string) {
+  try {
+    const url = new URL(input.trim());
+    const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+    if (url.protocol !== "https:" || hostname !== "instagram.com") return "";
+    const match = url.pathname.match(/^\/(p|reel)\/([A-Za-z0-9_-]+)\/?$/);
+    return match ? `https://www.instagram.com/${match[1]}/${match[2]}/` : "";
+  } catch {
+    return "";
+  }
 }
 
 async function waitForPublishedRequest(
