@@ -19,7 +19,7 @@ import {
   WRITE_SPEED_LABEL
 } from "@/upload-limits";
 
-type ActiveTab = "about" | "read" | "write";
+type ActiveTab = "about" | "read" | "share" | "write";
 type PublishPartStatus = {
   label: string;
   status: "waiting" | "uploading" | "processing" | "ready" | "failed";
@@ -44,6 +44,9 @@ export function InstagramPixelDbApp() {
   const [decodeProgress, setDecodeProgress] = useState<DecodeVideoProgress | null>(null);
   const [isDecodingVideo, setIsDecodingVideo] = useState(false);
   const [readUrl, setReadUrl] = useState("");
+  const [shareInstagramUrl, setShareInstagramUrl] = useState("");
+  const [fileShareLink, setFileShareLink] = useState("");
+  const [copiedShareLink, setCopiedShareLink] = useState("");
   const [isFetchingReadUrl, setIsFetchingReadUrl] = useState(false);
   const [isFileDragActive, setIsFileDragActive] = useState(false);
   const [publishNote, setPublishNote] = useState("");
@@ -228,6 +231,19 @@ export function InstagramPixelDbApp() {
     } finally {
       setIsFetchingReadUrl(false);
     }
+  }
+
+  function handleMakeShareLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const instagramUrl = normalizeReadUrl(shareInstagramUrl);
+    if (!instagramUrl) return;
+    setFileShareLink(makeFileShareLink(instagramUrl));
+    setCopiedShareLink("");
+  }
+
+  async function copyShareLink(link: string) {
+    await navigator.clipboard.writeText(link);
+    setCopiedShareLink(link);
   }
 
   async function decodeVideoFiles(files: File[], prepareDownloadWhenComplete = false) {
@@ -438,6 +454,14 @@ export function InstagramPixelDbApp() {
           </button>
           <button
             type="button"
+            className={activeTab === "share" ? "active" : ""}
+            aria-current={activeTab === "share" ? "page" : undefined}
+            onClick={() => setActiveTab("share")}
+          >
+            Share
+          </button>
+          <button
+            type="button"
             className={`about-tab${activeTab === "about" ? " active" : ""}`}
             aria-current={activeTab === "about" ? "page" : undefined}
             onClick={() => setActiveTab("about")}
@@ -459,6 +483,42 @@ export function InstagramPixelDbApp() {
             <p>
               Read reverses the process. Paste the URL of a Normal Shopkeep post to reconstruct and download the original file. Every recovered file must pass its original SHA-256 checksum before it can be downloaded.
             </p>
+          </fieldset>
+        </section>
+      ) : activeTab === "share" ? (
+        <section className="tab-panel share-layout">
+          <fieldset className="panel share-panel">
+            <legend>make a file share link</legend>
+            <form onSubmit={handleMakeShareLink}>
+              <label className="field-label" htmlFor="share-instagram-url">
+                Instagram URL
+                <input
+                  id="share-instagram-url"
+                  type="url"
+                  inputMode="url"
+                  placeholder="https://www.instagram.com/p/.../"
+                  value={shareInstagramUrl}
+                  onChange={(event) => {
+                    setShareInstagramUrl(event.target.value);
+                    setFileShareLink("");
+                    setCopiedShareLink("");
+                  }}
+                />
+              </label>
+              <div className="button-row">
+                <button type="submit" disabled={!normalizeReadUrl(shareInstagramUrl)}>make link</button>
+                {normalizeReadUrl(shareInstagramUrl) && !fileShareLink
+                  ? <span className="next-step-arrow" aria-hidden="true">←</span>
+                  : null}
+              </div>
+            </form>
+            {fileShareLink ? (
+              <ShareLinkField
+                link={fileShareLink}
+                copied={copiedShareLink === fileShareLink}
+                onCopy={() => copyShareLink(fileShareLink)}
+              />
+            ) : null}
           </fieldset>
         </section>
       ) : activeTab === "read" ? (
@@ -621,14 +681,11 @@ export function InstagramPixelDbApp() {
               ) : null}
               {publishedUrl ? <a className="published-link" href={publishedUrl} target="_blank" rel="noreferrer">open Instagram post</a> : null}
               {publishedUrl ? (
-                <a
-                  className="published-link"
-                  href={`/?read=${encodeURIComponent(publishedUrl)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  open read link
-                </a>
+                <ShareLinkField
+                  link={makeFileShareLink(publishedUrl)}
+                  copied={copiedShareLink === makeFileShareLink(publishedUrl)}
+                  onCopy={() => copyShareLink(makeFileShareLink(publishedUrl))}
+                />
               ) : null}
           </fieldset>
         </section>
@@ -636,6 +693,27 @@ export function InstagramPixelDbApp() {
       </main>
     </div>
   );
+}
+
+function ShareLinkField({ link, copied, onCopy }: { link: string; copied: boolean; onCopy: () => void }) {
+  return (
+    <div className="share-link-field">
+      <label className="field-label">
+        file share link
+        <input type="url" readOnly value={link} onFocus={(event) => event.currentTarget.select()} />
+      </label>
+      <div className="button-row">
+        <button type="button" disabled={copied} onClick={onCopy}>{copied ? "copied" : "copy link"}</button>
+        {!copied ? <span className="next-step-arrow" aria-hidden="true">←</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function makeFileShareLink(instagramUrl: string) {
+  const url = new URL("/", window.location.origin);
+  url.searchParams.set("read", instagramUrl);
+  return url.toString();
 }
 
 function normalizeReadUrl(input: string) {
