@@ -5,7 +5,12 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildInstagramCaption, type InstagramFileMetadata } from "@/instagram-caption";
 import { AUDIO_PROBE_SAMPLE_RATE, synthesizeDtmfProbePackets } from "@/audio-codec";
-import { findPublishedMediaByRequestId, recordPublicationStatus, recordPublishedMedia } from "@/lib/instagram-media-index";
+import {
+  findPublishedMediaByRequestId,
+  recordPublicationStatus,
+  recordPublishedMedia,
+  type PublicationPartStatus
+} from "@/lib/instagram-media-index";
 
 const API_VERSION = "v24.0";
 const INSTAGRAM_ACCOUNT_ID = "28189490653969128";
@@ -123,7 +128,9 @@ export async function stageInstagramVideoPart(input: {
   const inputPath = join(directory, `input-${String(input.partIndex + 1).padStart(2, "0")}.mp4`);
   await writeFile(inputPath, Buffer.from(await input.video.arrayBuffer()));
   try {
-    if (input.audioPayload) {
+    if (input.displayCover && input.partIndex === 0) {
+      await normalizeCoverVideo(inputPath, join(directory, fileName));
+    } else if (input.audioPayload) {
       await muxDtmfAudio(
         inputPath,
         join(directory, fileName),
@@ -191,7 +198,15 @@ export async function publishStagedInstagramVideos(input: {
     job.caption = buildInstagramCaption(input.metadata);
     await writeFile(join(directory, "job.json"), JSON.stringify(job));
     if (!job.publishRequestId) throw new Error("A publication request ID is required.");
-    await recordPublicationStatus(job.publishRequestId, "processing");
+    await recordPublicationStatus(
+      job.publishRequestId,
+      "processing",
+      undefined,
+      job.files.map((_, index) => ({
+        label: index === 0 && job.displayCover ? "cover" : `data video ${index + (job.displayCover ? 0 : 1)}`,
+        status: "waiting"
+      }))
+    );
     void publishStagedJob(job, input.mediaBaseUrl).catch(async (error) => {
       const message = error instanceof Error ? error.message : "Instagram publishing failed.";
       console.error("[instagram-publish] background failure", { jobId: job.id, requestId: job.publishRequestId, message });
@@ -283,7 +298,14 @@ async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
       console.log("[instagram-publish] child created", { jobId: job.id, requestId: job.publishRequestId, part: index + 1, containerId: child.id });
       return child.id;
     }));
-    await waitForContainers(childIds, accessToken);
+    const partLabels = job.files.map((_, index) =>
+      index === 0 && job.displayCover ? "cover" : `data video ${index + (job.displayCover ? 0 : 1)}`
+    );
+    await recordPublicationStatus(job.publishRequestId!, "processing", undefined, partLabels.map((label) => ({
+      label,
+      status: "processing"
+    })));
+    await waitForContainers(childIds, accessToken, job.publishRequestId!, partLabels);
     childIds.forEach((containerId, index) => {
       console.log("[instagram-publish] child finished", { jobId: job.id, requestId: job.publishRequestId, part: index + 1, containerId });
     });
@@ -399,8 +421,14 @@ async function waitForContainer(containerId: string, accessToken: string, label 
   throw new Error("Instagram video processing timed out.");
 }
 
-async function waitForContainers(containerIds: string[], accessToken: string) {
+async function waitForContainers(
+  containerIds: string[],
+  accessToken: string,
+  requestId?: string,
+  labels = containerIds.map((_, index) => `video ${index + 1}`)
+) {
   const pending = new Set(containerIds);
+  const parts: PublicationPartStatus[] = labels.map((label) => ({ label, status: "processing" }));
   let delayMs = 6000;
   for (let attempt = 0; attempt < 75; attempt += 1) {
     const response = await graphGet("/", {
@@ -417,16 +445,38 @@ async function waitForContainers(containerIds: string[], accessToken: string) {
     }
     for (const containerId of pending) {
       const status = response[containerId] as GraphResponse | undefined;
-      if (status?.status_code === "FINISHED") pending.delete(containerId);
+      const partIndex = containerIds.indexOf(containerId);
+      if (status?.status_code === "FINISHED") {
+        pending.delete(containerId);
+        parts[partIndex] = { ...parts[partIndex], status: "ready" };
+      }
       if (status?.status_code === "ERROR" || status?.status_code === "EXPIRED") {
+        parts[partIndex] = { ...parts[partIndex], status: "failed" };
+        if (requestId) await recordPublicationStatus(requestId, "failed", `Instagram could not process ${labels[partIndex]}.`, parts);
         console.error("[instagram-publish] container failed", { containerId, response: status });
-        throw new Error(`Instagram could not process video ${containerIds.indexOf(containerId) + 1}.`);
+        throw new Error(`Instagram could not process ${labels[partIndex]}.`);
       }
     }
+    if (requestId) await recordPublicationStatus(requestId, "processing", undefined, parts);
     if (!pending.size) return;
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
   throw new Error("Instagram video processing timed out.");
+}
+
+async function normalizeCoverVideo(inputPath: string, outputPath: string) {
+  await execFileAsync("ffmpeg", [
+    "-hide_banner", "-loglevel", "error", "-y",
+    "-i", inputPath,
+    "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+    "-map", "0:v:0", "-map", "1:a:0",
+    "-vf", "fps=30,format=yuv420p",
+    "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
+    "-b:v", "2M", "-maxrate", "2M", "-bufsize", "4M",
+    "-c:a", "aac", "-b:a", "96k",
+    "-t", "8", "-movflags", "+faststart",
+    outputPath
+  ]);
 }
 
 async function graphPost(path: string, values: Record<string, string>, accessToken: string) {

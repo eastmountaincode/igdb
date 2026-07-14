@@ -20,6 +20,10 @@ import {
 } from "@/upload-limits";
 
 type ActiveTab = "about" | "read" | "write";
+type PublishPartStatus = {
+  label: string;
+  status: "waiting" | "uploading" | "processing" | "ready" | "failed";
+};
 
 export function InstagramPixelDbApp() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("write");
@@ -47,6 +51,7 @@ export function InstagramPixelDbApp() {
   const [publishMessage, setPublishMessage] = useState("");
   const [publishedUrl, setPublishedUrl] = useState("");
   const [publishRequestId, setPublishRequestId] = useState("");
+  const [publishParts, setPublishParts] = useState<PublishPartStatus[]>([]);
   const activeFileLimit = MAX_SOURCE_FILE_WITH_COVER_BYTES;
   const activeFileLimitLabel = MAX_SOURCE_FILE_WITH_COVER_LABEL;
   const fileTooLarge = Boolean(selectedFile && selectedFile.size > activeFileLimit);
@@ -317,7 +322,14 @@ export function InstagramPixelDbApp() {
           audioPayload: video.audioPayload
         }))
       ];
+      setPublishParts(uploadParts.map((_, index) => ({
+        label: index === 0 ? "cover" : `data video ${index}`,
+        status: "waiting"
+      })));
       const uploadPart = async (index: number, uploadId = "", uploadToken = "") => {
+        setPublishParts((current) => current.map((part, partIndex) =>
+          partIndex === index ? { ...part, status: "uploading" } : part
+        ));
         setPublishMessage(`Uploading video ${index + 1} of ${uploadParts.length}...`);
         const video = uploadParts[index];
         const form = new FormData();
@@ -335,6 +347,9 @@ export function InstagramPixelDbApp() {
         if (!uploadResponse.ok || !uploadResult.uploadId || !uploadResult.uploadToken) {
           throw new Error(uploadResult.error || `Video ${index + 1} could not be uploaded.`);
         }
+        setPublishParts((current) => current.map((part, partIndex) =>
+          partIndex === index ? { ...part, status: "processing" } : part
+        ));
         return { uploadId: uploadResult.uploadId, uploadToken: uploadResult.uploadToken };
       };
       const firstUpload = await uploadPart(0);
@@ -365,13 +380,13 @@ export function InstagramPixelDbApp() {
         result = await readJsonResponse(response);
         if (!response.ok) throw new Error(result.error || "Instagram publishing failed.");
         if (result.status === "processing") {
-          const confirmed = await waitForPublishedRequest(requestId);
+          const confirmed = await waitForPublishedRequest(requestId, setPublishParts);
           if (!confirmed) throw new Error("Instagram is still processing the post. Keep this window open and try again shortly.");
           result = confirmed;
         }
       } catch (error) {
         setPublishMessage("Confirming the Instagram post...");
-        const confirmed = await waitForPublishedRequest(requestId);
+        const confirmed = await waitForPublishedRequest(requestId, setPublishParts);
         if (!confirmed) throw error;
         result = confirmed;
       }
@@ -582,6 +597,16 @@ export function InstagramPixelDbApp() {
               </div>
 
               {publishMessage ? <p className="publish-status" role="status">{publishMessage}</p> : null}
+              {publishParts.length ? (
+                <dl className="publish-parts" aria-label="Instagram video processing status">
+                  {publishParts.map((part) => (
+                    <div key={part.label}>
+                      <dt>{part.label}</dt>
+                      <dd>{part.status}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
               {publishedUrl ? <a className="published-link" href={publishedUrl} target="_blank" rel="noreferrer">open Instagram post</a> : null}
           </fieldset>
         </section>
@@ -591,7 +616,10 @@ export function InstagramPixelDbApp() {
   );
 }
 
-async function waitForPublishedRequest(publishRequestId: string) {
+async function waitForPublishedRequest(
+  publishRequestId: string,
+  onVideos?: (videos: PublishPartStatus[]) => void
+) {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     try {
       const response = await fetch("/api/instagram/status", {
@@ -602,6 +630,7 @@ async function waitForPublishedRequest(publishRequestId: string) {
       });
       if (response.ok) {
         const result = await readJsonResponse(response);
+        if (result.videos?.length) onVideos?.(result.videos);
         if (result.status === "published") return result;
         if (result.status === "failed") throw new Error(result.error || "Instagram publishing failed.");
       }
@@ -627,6 +656,7 @@ async function readJsonResponse(response: Response) {
     uploadId?: string;
     uploadToken?: string;
     status?: "processing" | "published" | "failed";
+    videos?: PublishPartStatus[];
   }>;
 }
 

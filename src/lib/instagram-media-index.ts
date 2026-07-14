@@ -13,15 +13,30 @@ export type PublishedMediaRecord = {
 };
 
 type MediaIndex = Record<string, PublishedMediaRecord>;
+export type PublicationPartStatus = {
+  label: string;
+  status: "waiting" | "processing" | "ready" | "failed";
+};
 type PublicationStatus = Record<string, {
   status: "processing" | "failed";
   error?: string;
+  parts?: PublicationPartStatus[];
   updatedAt: string;
 }>;
 
-export async function recordPublicationStatus(requestId: string, status: "processing" | "failed", error?: string) {
+export async function recordPublicationStatus(
+  requestId: string,
+  status: "processing" | "failed",
+  error?: string,
+  parts?: PublicationPartStatus[]
+) {
   const statuses = await readPublicationStatuses();
-  statuses[requestId] = { status, error, updatedAt: new Date().toISOString() };
+  statuses[requestId] = {
+    status,
+    error,
+    parts: parts ?? statuses[requestId]?.parts,
+    updatedAt: new Date().toISOString()
+  };
   await writeFile(STATUS_PATH, JSON.stringify(statuses, null, 2));
 }
 
