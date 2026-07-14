@@ -153,8 +153,6 @@ export function InstagramPixelDbApp() {
   function handleCoverSelection(event: ChangeEvent<HTMLInputElement>) {
     setCoverMedia(event.target.files?.[0] ?? null);
     setCoverVideo(null);
-    setPublishMessage("");
-    setPublishedUrl("");
   }
 
   function handleFileDrag(event: DragEvent<HTMLDivElement>) {
@@ -333,7 +331,7 @@ export function InstagramPixelDbApp() {
   }
 
   async function handlePublishToInstagram() {
-    if (!selectedFile || !encodedVideos.length || !coverVideo || isPublishing) return;
+    if (!selectedFile || !encodedVideos.length || !coverVideo || isPublishing || publishSucceeded) return;
     setIsPublishing(true);
     setPublishMessage("Uploading to @normal_shopkeep...");
     setPublishedUrl("");
@@ -458,7 +456,7 @@ export function InstagramPixelDbApp() {
             aria-current={activeTab === "share" ? "page" : undefined}
             onClick={() => setActiveTab("share")}
           >
-            Share
+            Make a link
           </button>
           <button
             type="button"
@@ -660,10 +658,10 @@ export function InstagramPixelDbApp() {
               <div className="button-row">
                 <button
                   type="button"
-                  disabled={!selectedFile || fileTooLarge || !encodedVideos.length || !coverVideo || isPublishing}
+                  disabled={!selectedFile || fileTooLarge || !encodedVideos.length || !coverVideo || isPublishing || publishSucceeded}
                   onClick={handlePublishToInstagram}
                 >
-                  {isPublishing ? "publishing..." : "publish to Instagram"}
+                  {isPublishing ? "publishing..." : publishSucceeded ? "published to Instagram" : "publish to Instagram"}
                 </button>
                 {nextWriteStep === "publish-instagram" ? <span className="next-step-arrow" aria-hidden="true">←</span> : null}
               </div>
