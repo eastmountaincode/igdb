@@ -195,9 +195,12 @@ export async function publishStagedInstagramVideos(input: {
     if (job.mediaToken !== input.uploadToken) throw new Error("Invalid upload session.");
     if (job.files.length !== job.totalParts) throw new Error("Not all video parts finished uploading.");
     job.publishRequestId = input.publishRequestId;
-    job.caption = buildInstagramCaption(input.metadata);
-    await writeFile(join(directory, "job.json"), JSON.stringify(job));
     if (!job.publishRequestId) throw new Error("A publication request ID is required.");
+    job.caption = buildInstagramCaption({
+      ...input.metadata,
+      shareUrl: buildPermanentShareUrl(input.mediaBaseUrl, job.publishRequestId)
+    });
+    await writeFile(join(directory, "job.json"), JSON.stringify(job));
     await recordPublicationStatus(
       job.publishRequestId,
       "processing",
@@ -217,6 +220,12 @@ export async function publishStagedInstagramVideos(input: {
     await rm(lockPath, { force: true });
     throw error;
   }
+}
+
+function buildPermanentShareUrl(baseUrl: string, requestId: string) {
+  const url = new URL("/", baseUrl);
+  url.searchParams.set("share", requestId);
+  return url.toString();
 }
 
 export async function readStagedMedia(jobId: string, fileName: string, token: string) {

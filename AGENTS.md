@@ -39,6 +39,8 @@ Meta processes all child videos concurrently. Published request IDs are recorded
 
 The Read page accepts an Instagram post or Reel URL from `@normal_shopkeep`. Zo resolves and proxies its ordered video parts through the authorized Instagram API, and the browser decoder reconstructs and SHA-256 verifies the source. After verification, Read presents one arrow-guided download button instead of downloading automatically; the button disables after the first download. Never expose Instagram CDN URLs or the account token to the browser.
 
+New publications receive a permanent `?share=<publication-request-id>` URL before Meta creates the post. That URL is appended to the Instagram caption as the download link. After publication, the runtime media index binds the request ID to the Instagram permalink; opening the permanent link resolves that mapping and prefills Read. Keep legacy `?read=<encoded Instagram URL>` links working.
+
 Every Write creates an eight-second, 720×720 H.264 **display video** containing the source filename, MIME type, and size. It is always carousel item 1 before the encoded data videos. An optional animated GIF may appear inside its padded safe area. The UI previews the actual generated MP4, not a responsive HTML imitation. The source limit is 25 MB so seven data videos plus the display video stay within Instagram's eight-item limit. Published media IDs and their display-video flag are recorded in the runtime-only `.instagram-media-index.json`, allowing Read to omit item 1 before decoding.
 
 The published service sources `/root/.zo_secrets` at startup so the Instagram token remains outside the repository. Keep `INSTAGRAM_MEDIA_BASE_URL` pointed at the public Zo Site URL.

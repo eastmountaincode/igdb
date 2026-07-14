@@ -4,6 +4,7 @@ export type InstagramFileMetadata = {
   size: number;
   addedBy?: string;
   note?: string;
+  shareUrl?: string;
 };
 
 export function buildInstagramCaption(metadata: InstagramFileMetadata) {
@@ -18,6 +19,9 @@ export function buildInstagramCaption(metadata: InstagramFileMetadata) {
 
   const note = metadata.note?.trim();
   if (note) lines.push("", `Note: ${note}`);
+
+  const shareUrl = metadata.shareUrl?.trim();
+  if (shareUrl) lines.push("", `Download: ${shareUrl}`);
   return `\n${lines.join("\n")}`;
 }
 

@@ -70,7 +70,20 @@ export function InstagramPixelDbApp() {
         : "publish-instagram";
 
   useEffect(() => {
-    const sharedUrl = new URLSearchParams(window.location.search).get("read");
+    const params = new URLSearchParams(window.location.search);
+    const shareId = params.get("share");
+    if (shareId && isValidShareId(shareId)) {
+      setActiveTab("read");
+      setDecodeMessages(["Resolving file share link..."]);
+      void resolvePermanentShareLink(shareId).then((instagramUrl) => {
+        setReadUrl(instagramUrl);
+        setDecodeMessages([]);
+      }).catch((error) => {
+        setDecodeMessages([error instanceof Error ? error.message : "File share link could not be resolved."]);
+      });
+      return;
+    }
+    const sharedUrl = params.get("read");
     const normalized = normalizeReadUrl(sharedUrl ?? "");
     if (!normalized) return;
     setReadUrl(normalized);
@@ -384,6 +397,7 @@ export function InstagramPixelDbApp() {
       const uploadToken = firstUpload.uploadToken;
       setPublishMessage("Publishing to @normal_shopkeep\u2026 keep this window open.");
       const requestId = publishRequestId || crypto.randomUUID();
+      if (!publishRequestId) setPublishRequestId(requestId);
       const publishBody = {
         uploadId,
         uploadToken,
@@ -692,9 +706,9 @@ export function InstagramPixelDbApp() {
               {publishedUrl ? <a className="published-link" href={publishedUrl} target="_blank" rel="noreferrer">open Instagram post</a> : null}
               {publishedUrl ? (
                 <ShareLinkField
-                  link={makeFileShareLink(publishedUrl)}
-                  copied={copiedShareLink === makeFileShareLink(publishedUrl)}
-                  onCopy={() => copyShareLink(makeFileShareLink(publishedUrl))}
+                  link={makePermanentShareLink(publishRequestId)}
+                  copied={copiedShareLink === makePermanentShareLink(publishRequestId)}
+                  onCopy={() => copyShareLink(makePermanentShareLink(publishRequestId))}
                 />
               ) : null}
           </fieldset>
@@ -724,6 +738,28 @@ function makeFileShareLink(instagramUrl: string) {
   const url = new URL("/", window.location.origin);
   url.searchParams.set("read", instagramUrl);
   return url.toString();
+}
+
+function makePermanentShareLink(shareId: string) {
+  const url = new URL("/", window.location.origin);
+  url.searchParams.set("share", shareId);
+  return url.toString();
+}
+
+function isValidShareId(value: string) {
+  return /^[a-zA-Z0-9-]{16,80}$/.test(value);
+}
+
+async function resolvePermanentShareLink(shareId: string) {
+  const response = await fetch(`/api/instagram/share?id=${encodeURIComponent(shareId)}`, {
+    headers: { "Accept": "application/json" },
+    cache: "no-store"
+  });
+  const result = await readJsonResponse(response);
+  if (!response.ok || !result.permalink) {
+    throw new Error(result.error || "File share link could not be resolved.");
+  }
+  return result.permalink;
 }
 
 function normalizeReadUrl(input: string) {
