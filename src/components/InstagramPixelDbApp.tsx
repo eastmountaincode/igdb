@@ -456,7 +456,7 @@ export function InstagramPixelDbApp() {
             aria-current={activeTab === "share" ? "page" : undefined}
             onClick={() => setActiveTab("share")}
           >
-            Make a link
+            Make a share link
           </button>
           <button
             type="button"
