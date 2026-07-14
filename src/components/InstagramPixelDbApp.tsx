@@ -49,6 +49,7 @@ export function InstagramPixelDbApp() {
   const [copiedShareLink, setCopiedShareLink] = useState("");
   const [isFetchingReadUrl, setIsFetchingReadUrl] = useState(false);
   const [isFileDragActive, setIsFileDragActive] = useState(false);
+  const [addedBy, setAddedBy] = useState("");
   const [publishNote, setPublishNote] = useState("");
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishMessage, setPublishMessage] = useState("");
@@ -389,6 +390,7 @@ export function InstagramPixelDbApp() {
         originalName: selectedFile.name,
         originalType: selectedFile.type || "application/octet-stream",
         originalSize: selectedFile.size,
+        addedBy: addedBy.trim(),
         note: publishNote.trim(),
         confirmation: "publish-to-normal-shopkeep",
         publishRequestId: requestId
@@ -644,6 +646,16 @@ export function InstagramPixelDbApp() {
                   {coverMedia ? <strong>{coverMedia.name}</strong> : null}
                 </div>
               </div>
+              <label className="field-label" htmlFor="instagram-added-by">
+                added by
+                <input
+                  id="instagram-added-by"
+                  type="text"
+                  value={addedBy}
+                  maxLength={100}
+                  onChange={(event) => setAddedBy(event.target.value)}
+                />
+              </label>
               <label className="field-label" htmlFor="instagram-note">
                 caption note (optional)
                 <textarea

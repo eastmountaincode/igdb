@@ -2,6 +2,7 @@ export type InstagramFileMetadata = {
   name: string;
   type: string;
   size: number;
+  addedBy?: string;
   note?: string;
 };
 
@@ -11,6 +12,9 @@ export function buildInstagramCaption(metadata: InstagramFileMetadata) {
     `File type: ${metadata.type || "application/octet-stream"}`,
     `File size: ${formatCaptionBytes(metadata.size)}`
   ];
+
+  const addedBy = metadata.addedBy?.trim();
+  if (addedBy) lines.push("", `Added by: ${addedBy}`);
 
   const note = metadata.note?.trim();
   if (note) lines.push("", `Note: ${note}`);

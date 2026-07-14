@@ -5,6 +5,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+const MAX_ADDED_BY_LENGTH = 100;
 const MAX_NOTE_LENGTH = 1000;
 const attemptsByAddress = new Map<string, Array<{ time: number; key: string }>>();
 
@@ -19,6 +20,7 @@ export async function POST(request: Request) {
       const originalName = requiredValue(body.originalName, "originalName", 1024);
       const originalType = requiredValue(body.originalType, "originalType", 255);
       const originalSize = Number(body.originalSize);
+      const addedBy = String(body.addedBy ?? "").trim();
       const note = String(body.note ?? "").trim();
       const uploadId = requiredValue(body.uploadId, "uploadId", 255);
       const publishRequestId = optionalRequestId(body.publishRequestId);
@@ -29,10 +31,13 @@ export async function POST(request: Request) {
       if (note.length > MAX_NOTE_LENGTH) {
         return Response.json({ error: `Note must be ${MAX_NOTE_LENGTH} characters or fewer.` }, { status: 400 });
       }
+      if (addedBy.length > MAX_ADDED_BY_LENGTH) {
+        return Response.json({ error: `Added by must be ${MAX_ADDED_BY_LENGTH} characters or fewer.` }, { status: 400 });
+      }
       const result = await publishStagedInstagramVideos({
         uploadId,
         uploadToken: requiredValue(body.uploadToken, "uploadToken", 255),
-        metadata: { name: originalName, type: originalType, size: originalSize, note },
+        metadata: { name: originalName, type: originalType, size: originalSize, addedBy, note },
         mediaBaseUrl: getMediaBaseUrl(request),
         publishRequestId
       });
@@ -70,6 +75,7 @@ export async function POST(request: Request) {
     const originalType = requiredText(form, "originalType", 255);
     const originalSize = Number(form.get("originalSize"));
     enforceRateLimit(request, `${originalName}:${originalSize}`);
+    const addedBy = String(form.get("addedBy") ?? "").trim();
     const note = String(form.get("note") ?? "").trim();
     if (!Number.isSafeInteger(originalSize) || originalSize < 0) {
       return Response.json({ error: "Invalid original file size." }, { status: 400 });
@@ -80,11 +86,14 @@ export async function POST(request: Request) {
     if (note.length > MAX_NOTE_LENGTH) {
       return Response.json({ error: `Note must be ${MAX_NOTE_LENGTH} characters or fewer.` }, { status: 400 });
     }
+    if (addedBy.length > MAX_ADDED_BY_LENGTH) {
+      return Response.json({ error: `Added by must be ${MAX_ADDED_BY_LENGTH} characters or fewer.` }, { status: 400 });
+    }
 
     const result = await publishInstagramVideos({
       videos,
       audioPayloads,
-      metadata: { name: originalName, type: originalType, size: originalSize, note },
+      metadata: { name: originalName, type: originalType, size: originalSize, addedBy, note },
       mediaBaseUrl: getMediaBaseUrl(request)
     });
     return noStoreJson(result);

@@ -33,7 +33,7 @@ The intended boundary is:
 
 Do not put Instagram credentials or browser session data in Git. Require a final user action before enqueueing a public post, show the destination account, and make retries idempotent so a failed job cannot create duplicate posts.
 
-The API branch publishes only to `@normal_shopkeep`. It reads `INSTAGRAM_ACCESS_TOKEN_NORMAL_SHOPKEEP` on the server and requires a public HTTPS origin (or `INSTAGRAM_MEDIA_BASE_URL`) so Meta can fetch staged MP4s. The UI builds captions from original file name, MIME type, size, and an optional note.
+The API branch publishes only to `@normal_shopkeep`. It reads `INSTAGRAM_ACCESS_TOKEN_NORMAL_SHOPKEEP` on the server and requires a public HTTPS origin (or `INSTAGRAM_MEDIA_BASE_URL`) so Meta can fetch staged MP4s. The UI builds captions from original file name, MIME type, size, an optional “added by” value, and an optional note.
 
 Meta processes all child videos concurrently. Published request IDs are recorded before permalink resolution; if a long publish response is lost at the public proxy, the client polls `/api/instagram/status` and recovers the existing post instead of reporting failure or creating a duplicate.
 
