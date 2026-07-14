@@ -647,7 +647,7 @@ export function InstagramPixelDbApp() {
                 </div>
               </div>
               <label className="field-label" htmlFor="instagram-added-by">
-                added by
+                added by (optional)
                 <input
                   id="instagram-added-by"
                   type="text"
