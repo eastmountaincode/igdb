@@ -204,6 +204,17 @@ table {
   gap: 0.75rem;
 }
 
+.about-panel h2 {
+  margin: 0;
+  font: inherit;
+  font-weight: bold;
+}
+
+.about-panel ol {
+  margin: 0;
+  padding-left: 1.5rem;
+}
+
 .dropzone {
   display: grid;
   gap: 0.35rem;

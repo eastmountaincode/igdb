@@ -492,10 +492,25 @@ export function InstagramPixelDbApp() {
           <fieldset className="panel about-panel">
             <legend>about</legend>
             <p>
-              Normal Shopkeep is an experiment in using Instagram as a public file system. Write turns a file into an Instagram carousel: a readable cover followed by videos that encode the file&rsquo;s data.
+              Normal Shopkeep is a website for using Instagram as a community flash drive. Use Write to upload files and Read to download them.
+            </p>
+            <h2>to write a file</h2>
+            <ol>
+              <li>Choose your file.</li>
+              <li>Generate the MP4s.</li>
+              <li>Add any optional information.</li>
+              <li>Publish to Instagram and keep the page open until publishing is complete.</li>
+            </ol>
+            <h2>to read a file</h2>
+            <p>
+              Enter the Instagram post URL, press Read URL, and wait for the file to be recovered. Once it is ready, press Download Recovered File.
+            </p>
+            <h2>to make a share link</h2>
+            <p>
+              Open Make a share link and enter the URL of a Normal Shopkeep post. The resulting link takes a person directly to Read with that post already filled in.
             </p>
             <p>
-              Read reverses the process. Paste the URL of a Normal Shopkeep post to reconstruct and download the original file. Every recovered file must pass its original SHA-256 checksum before it can be downloaded.
+              Normal Shopkeep is named after the Shopkeep in Ian Worthington&rsquo;s <a href="https://www.youtube.com/watch?v=_F9EMbkvLBQ&amp;t=10s" target="_blank" rel="noreferrer">Justice Free Apple</a>.
             </p>
           </fieldset>
         </section>
