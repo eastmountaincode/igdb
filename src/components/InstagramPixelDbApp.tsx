@@ -24,6 +24,10 @@ type PublishPartStatus = {
   label: string;
   status: "waiting" | "uploading" | "processing" | "ready" | "failed";
 };
+type ReadPartStatus = {
+  label: string;
+  status: "waiting" | "downloading" | "downloaded" | "decoding" | "ready" | "failed";
+};
 
 export function InstagramPixelDbApp() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("write");
@@ -42,6 +46,8 @@ export function InstagramPixelDbApp() {
   const [encodeError, setEncodeError] = useState("");
   const [encodeProgress, setEncodeProgress] = useState<EncodeVideoProgress | null>(null);
   const [decodeProgress, setDecodeProgress] = useState<DecodeVideoProgress | null>(null);
+  const [readParts, setReadParts] = useState<ReadPartStatus[]>([]);
+  const [verificationStatus, setVerificationStatus] = useState<"waiting" | "verifying" | "ready" | "failed" | "">("");
   const [isDecodingVideo, setIsDecodingVideo] = useState(false);
   const [readUrl, setReadUrl] = useState("");
   const [shareInstagramUrl, setShareInstagramUrl] = useState("");
@@ -137,6 +143,8 @@ export function InstagramPixelDbApp() {
     setHasDownloadedRecoveredFile(false);
     setDecodeMessages([]);
     setDecodeProgress(null);
+    setReadParts([]);
+    setVerificationStatus("");
   }
 
   function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
@@ -228,8 +236,16 @@ export function InstagramPixelDbApp() {
       });
       const result = await readJsonResponse(response);
       if (!response.ok || !result.parts) throw new Error(result.error || "Instagram URL could not be read.");
+      setReadParts(Array.from({ length: result.parts }, (_, index) => ({
+        label: `data video ${index + 1}`,
+        status: "waiting"
+      })));
+      setVerificationStatus("waiting");
       const videos: File[] = [];
       for (let part = 0; part < result.parts; part += 1) {
+        setReadParts((current) => current.map((item, index) =>
+          index === part ? { ...item, status: "downloading" } : item
+        ));
         setDecodeMessages([`Downloading video ${part + 1} of ${result.parts}...`]);
         const videoResponse = await fetch(`/api/instagram/read?url=${encodeURIComponent(url)}&part=${part}`);
         if (!videoResponse.ok) {
@@ -238,9 +254,16 @@ export function InstagramPixelDbApp() {
         }
         const blob = await videoResponse.blob();
         videos.push(new File([blob], `instagram-${part + 1}.mp4`, { type: "video/mp4" }));
+        setReadParts((current) => current.map((item, index) =>
+          index === part ? { ...item, status: "downloaded" } : item
+        ));
       }
-      await decodeVideoFiles(videos, true);
+      await decodeVideoFiles(videos, true, true);
     } catch (error) {
+      setReadParts((current) => current.map((item) =>
+        item.status === "downloading" ? { ...item, status: "failed" } : item
+      ));
+      setVerificationStatus("failed");
       setDecodeMessages([error instanceof Error ? error.message : "Instagram URL could not be read."]);
     } finally {
       setIsFetchingReadUrl(false);
@@ -260,9 +283,9 @@ export function InstagramPixelDbApp() {
     setCopiedShareLink(link);
   }
 
-  async function decodeVideoFiles(files: File[], prepareDownloadWhenComplete = false) {
+  async function decodeVideoFiles(files: File[], prepareDownloadWhenComplete = false, preserveReadStatus = false) {
     const videos = files.filter((file) => file.type.startsWith("video/") || file.name.toLowerCase().endsWith(".mp4"));
-    resetDecode();
+    if (!preserveReadStatus) resetDecode();
     if (!videos.length) return;
 
     setIsDecodingVideo(true);
@@ -272,6 +295,11 @@ export function InstagramPixelDbApp() {
     try {
       for (let index = 0; index < videos.length; index++) {
         const file = videos[index];
+        if (preserveReadStatus) {
+          setReadParts((current) => current.map((item, partIndex) =>
+            partIndex === index ? { ...item, status: "decoding" } : item
+          ));
+        }
         const reportProgress = (progress: DecodeVideoProgress) =>
           setDecodeProgress({
             ...progress,
@@ -300,12 +328,19 @@ export function InstagramPixelDbApp() {
           `${file.name}: recovered ${chunks.length ? `${recoveredChunks.length}/${chunks[0].totalChunks}` : "0"} chunks; merged ${mergedChunks.length}.`
         );
         setDecodeMessages([...messages]);
+        if (preserveReadStatus) {
+          setReadParts((current) => current.map((item, partIndex) =>
+            partIndex === index ? { ...item, status: "ready" } : item
+          ));
+        }
       }
       setDecodeProgress({ phase: "Decode complete", completed: videos.length, total: videos.length });
       const totalChunks = mergedChunks[0]?.totalChunks ?? 0;
       if (prepareDownloadWhenComplete && totalChunks > 0 && mergedChunks.length === totalChunks) {
+        setVerificationStatus("verifying");
         const assembled = await reassemble(mergedChunks);
         if (!assembled.hashOk) throw new Error("Recovered file failed SHA-256 verification.");
+        setVerificationStatus("ready");
         setRecoveredFile({ blob: assembled.blob, fileName: assembled.fileName });
         setHasDownloadedRecoveredFile(false);
         setDecodeMessages((current) => [
@@ -316,6 +351,12 @@ export function InstagramPixelDbApp() {
         throw new Error(`Only ${mergedChunks.length}/${totalChunks || "?"} chunks were recovered.`);
       }
     } catch (error) {
+      if (preserveReadStatus) {
+        setReadParts((current) => current.map((item) =>
+          item.status === "decoding" ? { ...item, status: "failed" } : item
+        ));
+        setVerificationStatus("failed");
+      }
       setDecodeMessages([...messages, `Video decode failed: ${error instanceof Error ? error.message : String(error)}`]);
       setDecodeProgress({ phase: "Decode failed", completed: 1, total: 1 });
     } finally {
@@ -608,6 +649,21 @@ export function InstagramPixelDbApp() {
               </button>
               {recoveredFile && !hasDownloadedRecoveredFile ? <span className="next-step-arrow" aria-hidden="true">←</span> : null}
             </div>
+
+            {readParts.length ? (
+              <dl className="publish-parts" aria-label="File recovery status">
+                {readParts.map((part) => (
+                  <div key={part.label}>
+                    <dt>{part.label}</dt>
+                    <dd>{part.status}</dd>
+                  </div>
+                ))}
+                <div>
+                  <dt>recovered file</dt>
+                  <dd>{verificationStatus}</dd>
+                </div>
+              </dl>
+            ) : null}
 
             {decodeProgress ? <ProgressView progress={decodeProgress} active={isDecodingVideo} label="Decoding progress" /> : null}
             {decodeLog ? <pre>{decodeLog}</pre> : null}
