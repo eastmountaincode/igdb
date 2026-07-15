@@ -485,7 +485,8 @@ async function encodeVideoSegment({
     await yieldToBrowser();
   }
 
-  const blob = await recordChunkJobsAsMp4(renderJobs, repeatFrames, VIDEO_FPS, (progress) =>
+  const orderedRenderJobs = interleaveParityGroups(renderJobs, dataChunkCount);
+  const blob = await recordChunkJobsAsMp4(orderedRenderJobs, repeatFrames, VIDEO_FPS, (progress) =>
     onProgress?.({
       ...progress,
       phase: totalSegments > 1 ? `${progress.phase} ${segmentIndex + 1}/${totalSegments}` : progress.phase
@@ -637,8 +638,9 @@ async function encodeHybridVideoSegment({
   }
 
   const audioPayloads = segment.audioChunks.map((chunk) => bytes.slice(chunk.payloadStart, chunk.payloadStart + chunk.payloadLength));
+  const orderedRenderJobs = interleaveParityGroups(renderJobs, dataChunkCount);
   const blob = await recordChunkJobsAsMp4(
-    renderJobs,
+    orderedRenderJobs,
     repeatFrames,
     VIDEO_FPS,
     (progress) =>
@@ -692,6 +694,22 @@ async function encodeHybridVideoSegment({
       `sha256=${fileHash}`
     ].join("\n")
   };
+}
+
+function interleaveParityGroups(renderJobs: RenderChunkJob[], dataChunkCount: number) {
+  const dataJobs = renderJobs.slice(0, dataChunkCount);
+  const parityJobs = renderJobs.slice(dataChunkCount);
+  const interleaved: RenderChunkJob[] = [];
+
+  for (let memberOffset = 0; memberOffset < VIDEO_PARITY_GROUP_SIZE; memberOffset++) {
+    for (let groupStart = 0; groupStart < dataJobs.length; groupStart += VIDEO_PARITY_GROUP_SIZE) {
+      const job = dataJobs[groupStart + memberOffset];
+      if (job) interleaved.push(job);
+    }
+  }
+
+  interleaved.push(...parityJobs);
+  return interleaved.map((job, order) => ({ ...job, order }));
 }
 
 async function encodeSegmentsInParallel(
