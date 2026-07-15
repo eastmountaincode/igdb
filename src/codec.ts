@@ -30,7 +30,8 @@ export const VIDEO_FPS = 30;
 export const VIDEO_REPEAT_FRAMES = 3;
 const INSTAGRAM_MIN_VIDEO_SECONDS = 3;
 export const VIDEO_PARITY_GROUP_SIZE = 16;
-export const VIDEO_TARGET_SECONDS = 55;
+export const VIDEO_TARGET_SECONDS = 56;
+const VIDEO_STARTUP_DUPLICATE_FRAMES = 8;
 const AUDIO_PACKETS_PER_VIDEO = Math.floor(VIDEO_TARGET_SECONDS / AUDIO_PROBE_DURATION_SECONDS);
 const AUDIO_PAYLOAD_BYTES = AUDIO_PACKETS_PER_VIDEO * AUDIO_PROBE_PAYLOAD_BYTES;
 export const VIDEO_BITRATE = 6_000_000;
@@ -492,7 +493,7 @@ async function encodeVideoSegment({
       phase: totalSegments > 1 ? `${progress.phase} ${segmentIndex + 1}/${totalSegments}` : progress.phase
     })
   );
-  const durationSeconds = (renderJobs.length * repeatFrames) / VIDEO_FPS;
+  const durationSeconds = (orderedRenderJobs.length * repeatFrames) / VIDEO_FPS;
   const payloadBytes =
     chunkStart * PAYLOAD_BYTES_PER_IMAGE >= bytes.length
       ? 0
@@ -500,7 +501,7 @@ async function encodeVideoSegment({
   return {
     blob,
     url: URL.createObjectURL(blob),
-    frameCount: renderJobs.length * repeatFrames,
+    frameCount: orderedRenderJobs.length * repeatFrames,
     chunkCount: renderJobs.length,
     payloadBytes,
     fileBytes: bytes.length,
@@ -563,7 +564,9 @@ function planHybridSegments(fileSize: number, maxVisualChunksPerVideo: number): 
 
 function transmittedFrameCountForDataChunks(dataChunkCount: number) {
   if (dataChunkCount <= 0) return 0;
-  return dataChunkCount + Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE);
+  return dataChunkCount
+    + Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE)
+    + Math.min(dataChunkCount, VIDEO_STARTUP_DUPLICATE_FRAMES);
 }
 
 async function encodeHybridVideoSegment({
@@ -651,7 +654,7 @@ async function encodeHybridVideoSegment({
     audioPayloads
   );
   const durationSeconds = Math.max(
-    (renderJobs.length * repeatFrames) / VIDEO_FPS,
+    (orderedRenderJobs.length * repeatFrames) / VIDEO_FPS,
     audioPayloads.reduce((sum, payload) => sum + audioProbeDurationForByteLength(payload.length), 0),
     INSTAGRAM_MIN_VIDEO_SECONDS
   );
@@ -666,7 +669,7 @@ async function encodeHybridVideoSegment({
       ? new Blob(audioPayloads, { type: "application/octet-stream" })
       : undefined,
     url: URL.createObjectURL(blob),
-    frameCount: renderJobs.length * repeatFrames,
+    frameCount: orderedRenderJobs.length * repeatFrames,
     chunkCount: renderJobs.length,
     payloadBytes: visualPayloadBytes,
     fileBytes: bytes.length,
@@ -709,6 +712,7 @@ function interleaveParityGroups(renderJobs: RenderChunkJob[], dataChunkCount: nu
   }
 
   interleaved.push(...parityJobs);
+  interleaved.push(...interleaved.slice(0, VIDEO_STARTUP_DUPLICATE_FRAMES));
   return interleaved.map((job, order) => ({ ...job, order }));
 }
 
@@ -1232,7 +1236,7 @@ function padAudioPayload(payload: Uint8Array) {
 function maxDataChunksForTargetVideo(repeatFrames: number, targetSeconds = VIDEO_TARGET_SECONDS) {
   const maxTransmittedChunks = Math.floor((targetSeconds * VIDEO_FPS) / repeatFrames);
   let dataChunks = 0;
-  while (dataChunks + 1 + Math.ceil((dataChunks + 1) / VIDEO_PARITY_GROUP_SIZE) <= maxTransmittedChunks) {
+  while (transmittedFrameCountForDataChunks(dataChunks + 1) <= maxTransmittedChunks) {
     dataChunks++;
   }
   return Math.max(1, dataChunks);
