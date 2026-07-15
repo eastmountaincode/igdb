@@ -508,7 +508,7 @@ async function normalizeDataVideo(
       ...(packets.length ? ["-i", wavPath] : []),
       "-map", "0:v:0",
       ...(packets.length ? ["-map", "1:a:0"] : []),
-      "-vf", "select=not(mod(n\\,3)),setpts=N/(10*TB)",
+      "-vf", "setpts=N/(10*TB)",
       "-c:v", "libx264",
       "-preset", "veryfast",
       "-tune", "animation",
