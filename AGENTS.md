@@ -37,6 +37,8 @@ The API branch publishes only to `@normal_shopkeep`. It reads `INSTAGRAM_ACCESS_
 
 Meta processes all child videos concurrently. Published request IDs are recorded before permalink resolution; if a long publish response is lost at the public proxy, the client polls `/api/instagram/status` and recovers the existing post instead of reporting failure or creating a duplicate.
 
+Completed visitor uploads enter a durable filesystem-backed FIFO queue. Browser encoding and browser-to-Zo uploads may run concurrently, but the queue permits only one Instagram publication at a time for `@normal_shopkeep`. Queue state survives service restarts, status polling resumes an interrupted queue runner, transient Meta/network errors receive one bounded retry, and the UI displays queue position. Publication status and media-index JSON writes use file locks plus atomic replacement so simultaneous jobs cannot overwrite one another.
+
 The Read page accepts an Instagram post or Reel URL from `@normal_shopkeep`. Zo resolves and proxies its ordered video parts through the authorized Instagram API, and the browser decoder reconstructs and SHA-256 verifies the source. After verification, Read presents one arrow-guided download button instead of downloading automatically; the button disables after the first download. Never expose Instagram CDN URLs or the account token to the browser.
 
 New publications receive a permanent `?share=<publication-request-id>` URL before Meta creates the post. That URL is appended to the Instagram caption as the download link. After publication, the runtime media index binds the request ID to the Instagram permalink; opening the permanent link resolves that mapping and prefills Read. Keep legacy `?read=<encoded Instagram URL>` links working.

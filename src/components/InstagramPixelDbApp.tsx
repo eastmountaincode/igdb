@@ -56,6 +56,7 @@ export function InstagramPixelDbApp() {
   const [publishedUrl, setPublishedUrl] = useState("");
   const [publishRequestId, setPublishRequestId] = useState("");
   const [publishParts, setPublishParts] = useState<PublishPartStatus[]>([]);
+  const [publishQueuePosition, setPublishQueuePosition] = useState<number | null>(null);
   const activeFileLimit = MAX_SOURCE_FILE_WITH_COVER_BYTES;
   const activeFileLimitLabel = MAX_SOURCE_FILE_WITH_COVER_LABEL;
   const fileTooLarge = Boolean(selectedFile && selectedFile.size > activeFileLimit);
@@ -161,6 +162,7 @@ export function InstagramPixelDbApp() {
     setEncodeError("");
     setPublishMessage("");
     setPublishedUrl("");
+    setPublishQueuePosition(null);
     setPublishRequestId(file ? crypto.randomUUID() : "");
   }
 
@@ -418,18 +420,20 @@ export function InstagramPixelDbApp() {
         });
         result = await readJsonResponse(response);
         if (!response.ok) throw new Error(result.error || "Instagram publishing failed.");
-        if (result.status === "processing") {
-          const confirmed = await waitForPublishedRequest(requestId, setPublishParts);
+        if (result.status === "queued" || result.status === "processing") {
+          setPublishQueuePosition(result.queuePosition ?? null);
+          const confirmed = await waitForPublishedRequest(requestId, setPublishParts, setPublishQueuePosition);
           if (!confirmed) throw new Error("Instagram is still processing the post. Keep this window open and try again shortly.");
           result = confirmed;
         }
       } catch (error) {
         setPublishMessage("Confirming the Instagram post...");
-        const confirmed = await waitForPublishedRequest(requestId, setPublishParts);
+        const confirmed = await waitForPublishedRequest(requestId, setPublishParts, setPublishQueuePosition);
         if (!confirmed) throw error;
         result = confirmed;
       }
       if (result.permalink) setPublishedUrl(result.permalink);
+      setPublishQueuePosition(null);
       setPublishMessage(
         result.permalink
           ? `Published ${result.parts ?? uploadParts.length} ${pluralize("video", result.parts ?? uploadParts.length)}.`
@@ -715,6 +719,9 @@ export function InstagramPixelDbApp() {
               </div>
 
               {publishMessage ? <p className="publish-status" role="status">{publishMessage}</p> : null}
+              {publishQueuePosition && publishQueuePosition > 1 ? (
+                <p className="publish-status" role="status">Instagram queue position: {publishQueuePosition}</p>
+              ) : null}
               {publishParts.length ? (
                 <dl className="publish-parts" aria-label="Instagram video processing status">
                   {publishParts.map((part) => (
@@ -798,9 +805,10 @@ function normalizeReadUrl(input: string) {
 
 async function waitForPublishedRequest(
   publishRequestId: string,
-  onVideos?: (videos: PublishPartStatus[]) => void
+  onVideos?: (videos: PublishPartStatus[]) => void,
+  onQueuePosition?: (position: number | null) => void
 ) {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  for (let attempt = 0; attempt < 900; attempt += 1) {
     try {
       const response = await fetch("/api/instagram/status", {
         method: "POST",
@@ -811,6 +819,7 @@ async function waitForPublishedRequest(
       if (response.ok) {
         const result = await readJsonResponse(response);
         if (result.videos?.length) onVideos?.(result.videos);
+        onQueuePosition?.(typeof result.queuePosition === "number" ? result.queuePosition : null);
         if (result.status === "published") return result;
         if (result.status === "failed") throw new Error(result.error || "Instagram publishing failed.");
       }
@@ -835,7 +844,8 @@ async function readJsonResponse(response: Response) {
     parts?: number;
     uploadId?: string;
     uploadToken?: string;
-    status?: "processing" | "published" | "failed";
+    status?: "queued" | "processing" | "published" | "failed";
+    queuePosition?: number;
     videos?: PublishPartStatus[];
   }>;
 }

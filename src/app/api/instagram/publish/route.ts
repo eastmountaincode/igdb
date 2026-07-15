@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const MAX_ADDED_BY_LENGTH = 100;
 const MAX_NOTE_LENGTH = 1000;
+const MAX_PUBLISHES_PER_ADDRESS_PER_HOUR = 30;
 const attemptsByAddress = new Map<string, Array<{ time: number; key: string }>>();
 
 export async function POST(request: Request) {
@@ -145,7 +146,7 @@ function enforceRateLimit(request: Request, key: string) {
   const now = Date.now();
   const recent = (attemptsByAddress.get(address) ?? []).filter((attempt) => now - attempt.time < 60 * 60 * 1000);
   if (!recent.some((attempt) => attempt.key === key)) {
-    if (recent.length >= 3) throw new Error("Publishing limit reached. Try again later.");
+    if (recent.length >= MAX_PUBLISHES_PER_ADDRESS_PER_HOUR) throw new Error("Publishing limit reached. Try again later.");
     recent.push({ time: now, key });
   }
   attemptsByAddress.set(address, recent);

@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -16,6 +16,7 @@ const API_VERSION = "v24.0";
 const INSTAGRAM_ACCOUNT_ID = "28189490653969128";
 const INSTAGRAM_USERNAME = "normal_shopkeep";
 const JOB_ROOT = join(process.cwd(), ".instagram-uploads");
+const QUEUE_LOCK_PATH = join(JOB_ROOT, ".publisher-queue.lock");
 const execFileAsync = promisify(execFile);
 
 type StagedJob = {
@@ -26,6 +27,9 @@ type StagedJob = {
   totalParts: number;
   displayCover?: boolean;
   publishRequestId?: string;
+  mediaBaseUrl?: string;
+  queuedAt?: string;
+  publishAttempts?: number;
   createdAt: string;
 };
 
@@ -201,24 +205,137 @@ export async function publishStagedInstagramVideos(input: {
       shareUrl: buildPermanentShareUrl(input.mediaBaseUrl, job.publishRequestId)
     });
     await writeFile(join(directory, "job.json"), JSON.stringify(job));
+    job.mediaBaseUrl = input.mediaBaseUrl;
+    job.queuedAt = job.queuedAt ?? new Date().toISOString();
+    await writeFile(join(directory, "job.json"), JSON.stringify(job));
+    const queuePosition = await getQueuePosition(job.id);
     await recordPublicationStatus(
       job.publishRequestId,
-      "processing",
+      "queued",
       undefined,
       job.files.map((_, index) => ({
         label: index === 0 && job.displayCover ? "cover" : `data video ${index + (job.displayCover ? 0 : 1)}`,
         status: "waiting"
-      }))
+      })),
+      queuePosition
     );
-    void publishStagedJob(job, input.mediaBaseUrl).catch(async (error) => {
-      const message = error instanceof Error ? error.message : "Instagram publishing failed.";
-      console.error("[instagram-publish] background failure", { jobId: job.id, requestId: job.publishRequestId, message });
-      await recordPublicationStatus(job.publishRequestId!, "failed", message);
-    });
-    return { status: "processing" as const, requestId: job.publishRequestId, parts: job.totalParts };
+    resumeInstagramPublisherQueue();
+    return { status: "queued" as const, requestId: job.publishRequestId, parts: job.totalParts, queuePosition };
   } catch (error) {
     await rm(lockPath, { force: true });
     throw error;
+  }
+}
+
+export function resumeInstagramPublisherQueue() {
+  void runInstagramPublisherQueue().catch((error) => {
+    console.error("[instagram-publish] queue runner failed", error);
+  });
+}
+
+async function runInstagramPublisherQueue() {
+  await mkdir(JOB_ROOT, { recursive: true });
+  let queueLock: Awaited<ReturnType<typeof open>>;
+  try {
+    queueLock = await open(QUEUE_LOCK_PATH, "wx");
+    await queueLock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if (await queueLockIsStale()) {
+      await rm(QUEUE_LOCK_PATH, { force: true });
+      return runInstagramPublisherQueue();
+    }
+    return;
+  }
+  try {
+    while (true) {
+      const jobs = await listQueuedJobs();
+      if (!jobs.length) break;
+      await updateQueuePositions(jobs);
+      const job = jobs[0];
+      await recordPublicationStatus(job.publishRequestId!, "processing", undefined, undefined, 0);
+      try {
+        await publishQueuedJobWithRetry(job);
+        await rm(join(JOB_ROOT, job.id), { recursive: true, force: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Instagram publishing failed.";
+        console.error("[instagram-publish] queued job failed", { jobId: job.id, requestId: job.publishRequestId, message });
+        await recordPublicationStatus(job.publishRequestId!, "failed", message);
+        await rm(join(JOB_ROOT, job.id), { recursive: true, force: true });
+      }
+    }
+  } finally {
+    await queueLock.close();
+    await rm(QUEUE_LOCK_PATH, { force: true });
+  }
+}
+
+async function listQueuedJobs() {
+  const entries = await readdir(JOB_ROOT, { withFileTypes: true });
+  const jobs: StagedJob[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const job = JSON.parse(await readFile(join(JOB_ROOT, entry.name, "job.json"), "utf8")) as StagedJob;
+      if (job.publishRequestId && job.queuedAt && job.mediaBaseUrl) jobs.push(job);
+    } catch {
+      // An upload may still be staging its first part.
+    }
+  }
+  return jobs.sort((left, right) => left.queuedAt!.localeCompare(right.queuedAt!));
+}
+
+async function getQueuePosition(jobId: string) {
+  const jobs = await listQueuedJobs();
+  const index = jobs.findIndex((job) => job.id === jobId);
+  return index < 0 ? 1 : index + 1;
+}
+
+async function updateQueuePositions(jobs: StagedJob[]) {
+  await Promise.all(jobs.map((job, index) =>
+    recordPublicationStatus(job.publishRequestId!, index === 0 ? "processing" : "queued", undefined, undefined, index + 1)
+  ));
+}
+
+async function publishQueuedJobWithRetry(job: StagedJob) {
+  const maximumAttempts = 2;
+  for (let attempt = job.publishAttempts ?? 0; attempt < maximumAttempts; attempt += 1) {
+    job.publishAttempts = attempt + 1;
+    await writeFile(join(JOB_ROOT, job.id, "job.json"), JSON.stringify(job));
+    try {
+      return await publishStagedJob(job, job.mediaBaseUrl!);
+    } catch (error) {
+      if (attempt + 1 >= maximumAttempts || !isTransientPublishError(error)) throw error;
+      const delayMs = 15000 * (attempt + 1);
+      console.warn("[instagram-publish] retrying queued job", { jobId: job.id, attempt: attempt + 2, delayMs });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+function isTransientPublishError(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  return /rate|temporar|timeout|timed out|network|fetch|try again|code 4/.test(message);
+}
+
+async function queueLockIsStale() {
+  try {
+    const lock = JSON.parse(await readFile(QUEUE_LOCK_PATH, "utf8")) as { pid?: number };
+    if (Number.isInteger(lock.pid)) {
+      try {
+        process.kill(lock.pid!, 0);
+        return false;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+      }
+    }
+    return Date.now() - (await stat(QUEUE_LOCK_PATH)).mtimeMs > 2 * 60 * 60 * 1000;
+  } catch {
+    try {
+      return Date.now() - (await stat(QUEUE_LOCK_PATH)).mtimeMs > 2 * 60 * 60 * 1000;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -271,8 +388,7 @@ async function stageJob(videos: File[], audioPayloads: File[], metadata: Instagr
 async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
   const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN_NORMAL_SHOPKEEP;
   if (!accessToken) throw new Error("Instagram publishing is not configured.");
-  try {
-    if (job.publishRequestId) {
+  if (job.publishRequestId) {
       const existing = await findPublishedMediaByRequestId(job.publishRequestId);
       if (existing) {
         const permalink = existing.permalink || await waitForPublishedPermalink(existing.mediaId, accessToken);
@@ -292,7 +408,7 @@ async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
           parts: existing.parts ?? job.totalParts
         };
       }
-    }
+  }
     console.log("[instagram-publish] starting", { jobId: job.id, requestId: job.publishRequestId, parts: job.files.length, displayCover: job.displayCover === true });
     const childIds = await Promise.all(job.files.map(async (fileName, index) => {
       const mediaUrl = `${mediaBaseUrl}/api/instagram/media/${job.id}/${encodeURIComponent(job.files[index])}?token=${job.mediaToken}`;
@@ -345,16 +461,13 @@ async function publishStagedJob(job: StagedJob, mediaBaseUrl: string) {
       parts: childIds.length
     });
     console.log("[instagram-publish] permalink resolved", { mediaId: published.id, permalink });
-    return {
+  return {
       mediaId: published.id,
       permalink,
       username: INSTAGRAM_USERNAME,
       caption: job.caption,
       parts: childIds.length
-    };
-  } finally {
-    await rm(join(JOB_ROOT, job.id), { recursive: true, force: true });
-  }
+  };
 }
 
 async function waitForPublishedPermalink(mediaId: string, accessToken: string) {
@@ -501,7 +614,8 @@ async function graphGet(path: string, values: Record<string, string>, accessToke
 }
 
 function graphError(response: GraphResponse, fallback: string) {
-  return new Error(response.error?.message || response.status || fallback);
+  const message = response.error?.message || response.status || fallback;
+  return new Error(response.error?.code ? `${message} (Meta code ${response.error.code})` : message);
 }
 
 function safeSegment(value: string) {
