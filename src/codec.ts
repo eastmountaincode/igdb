@@ -1329,6 +1329,22 @@ function reedSolomonCoefficient(parityRow: number, member: number) {
 }
 
 function gfMultiply(left: number, right: number) {
+  return GF_MULTIPLICATION_TABLE[(left << 8) | right];
+}
+
+const GF_MULTIPLICATION_TABLE = buildGaloisMultiplicationTable();
+
+function buildGaloisMultiplicationTable() {
+  const table = new Uint8Array(256 * 256);
+  for (let left = 0; left < 256; left++) {
+    for (let right = 0; right < 256; right++) {
+      table[(left << 8) | right] = gfMultiplyRaw(left, right);
+    }
+  }
+  return table;
+}
+
+function gfMultiplyRaw(left: number, right: number) {
   let a = left;
   let b = right;
   let product = 0;
