@@ -282,6 +282,7 @@ table {
 }
 
 .next-step-arrow {
+  color: #c00;
   display: inline-block;
   font-weight: bold;
   line-height: 1;
