@@ -889,31 +889,28 @@ export async function decodeVideoFileTemporalVote(
   repeatFrames = VIDEO_REPEAT_FRAMES,
   onProgress?: (progress: DecodeVideoProgress) => void
 ): Promise<DecodeResult[]> {
-  const video = document.createElement("video");
-  video.muted = true;
-  video.playsInline = true;
-  video.preload = "auto";
-  const url = URL.createObjectURL(file);
-  video.src = url;
   onProgress?.({ phase: "Loading video", completed: 0, total: 1 });
+  const { Input, ALL_FORMATS, BlobSource, CanvasSink } = await import("mediabunny");
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
 
   try {
-    await waitForVideoMetadata(video);
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) throw new Error("Could not find a video track for decoding.");
+    const stats = await track.computePacketStats();
+    const totalFrames = Math.max(1, stats.packetCount);
+    const sink = new CanvasSink(track, { width: CANVAS_SIZE, height: CANVAS_SIZE, fit: "fill" });
     const canvas = document.createElement("canvas");
     canvas.width = CANVAS_SIZE;
     canvas.height = CANVAS_SIZE;
     const ctx = requiredContext(canvas);
-    const duration = Number.isFinite(video.duration) ? video.duration : 0;
-    const totalFrames = Math.max(1, Math.floor(duration * VIDEO_FPS));
     const sampledFrames: number[][] = [];
     const byChunk = new Map<number, DecodeResult>();
+    let frameIndex = 0;
 
-    for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
-      const time = Math.min(Math.max(0, (frameIndex + 0.5) / VIDEO_FPS), Math.max(0, duration - 0.001));
-      await seekVideo(video, time);
+    for await (const frame of sink.canvases()) {
       ctx.fillStyle = "#fff";
       ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-      ctx.drawImage(video, 0, 0, CANVAS_SIZE, CANVAS_SIZE);
+      ctx.drawImage(frame.canvas, 0, 0, CANVAS_SIZE, CANVAS_SIZE);
       const imageData = ctx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE).data;
       const symbols = readSymbolsFromImageData(imageData);
       sampledFrames.push(symbols);
@@ -925,7 +922,8 @@ export async function decodeVideoFileTemporalVote(
       } catch {
         // Temporal voting below recovers frames damaged at video transitions.
       }
-      onProgress?.({ phase: "Sampling repeated frames", completed: frameIndex + 1, total: totalFrames });
+      frameIndex++;
+      onProgress?.({ phase: "Sampling repeated frames", completed: frameIndex, total: totalFrames });
       if (frameIndex % 8 === 7) await yieldToBrowser();
     }
 
@@ -948,7 +946,7 @@ export async function decodeVideoFileTemporalVote(
     onProgress?.({ phase: "Recovering chunks", completed: 1, total: 1 });
     return recoverDataChunks([...byChunk.values()]);
   } finally {
-    URL.revokeObjectURL(url);
+    input.dispose();
   }
 }
 
