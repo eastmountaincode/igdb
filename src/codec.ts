@@ -847,7 +847,7 @@ async function decodeVideoFileSingleFrame(
     canvas.width = CANVAS_SIZE;
     canvas.height = CANVAS_SIZE;
     const ctx = requiredContext(canvas);
-    const byChunk = new Map<number, DecodeResult>();
+    const byChunk = new Map<string, DecodeResult>();
     const decodePool = createDecodeWorkerPool();
     const pendingDecodes: Promise<void>[] = [];
     let queuedFrames = 0;
@@ -867,8 +867,9 @@ async function decodeVideoFileSingleFrame(
           if (!decodePool) {
             try {
               const decoded = await decodeFrameData(imageData, decodePool);
-              if (decoded.ok && !byChunk.has(decoded.chunkIndex)) {
-                byChunk.set(decoded.chunkIndex, decoded);
+              const key = decodedChunkKey(decoded);
+              if (decoded.ok && !byChunk.has(key)) {
+                byChunk.set(key, decoded);
               }
             } catch {
               // Video compression can make individual frames undecodable; repeated frames handle this.
@@ -880,8 +881,9 @@ async function decodeVideoFileSingleFrame(
 
           const decodePromise = decodeFrameData(imageData, decodePool)
             .then((decoded) => {
-              if (decoded.ok && !byChunk.has(decoded.chunkIndex)) {
-                byChunk.set(decoded.chunkIndex, decoded);
+              const key = decodedChunkKey(decoded);
+              if (decoded.ok && !byChunk.has(key)) {
+                byChunk.set(key, decoded);
               }
             })
             .catch(() => {
@@ -934,7 +936,7 @@ export async function decodeVideoFileTemporalVote(
     canvas.height = CANVAS_SIZE;
     const ctx = requiredContext(canvas);
     const sampledFrames: number[][] = [];
-    const byChunk = new Map<number, DecodeResult>();
+    const byChunk = new Map<string, DecodeResult>();
     let frameIndex = 0;
 
     for await (const frame of sink.canvases()) {
@@ -946,8 +948,9 @@ export async function decodeVideoFileTemporalVote(
       sampledFrames.push(symbols);
       try {
         const decoded = decodeSymbols(symbols);
-        if (decoded.ok && !byChunk.has(decoded.chunkIndex)) {
-          byChunk.set(decoded.chunkIndex, decoded);
+        const key = decodedChunkKey(decoded);
+        if (decoded.ok && !byChunk.has(key)) {
+          byChunk.set(key, decoded);
         }
       } catch {
         // Temporal voting below recovers frames damaged at video transitions.
@@ -962,8 +965,9 @@ export async function decodeVideoFileTemporalVote(
     for (let start = 0; start < windowCount; start++) {
       try {
         const decoded = decodeSymbols(majoritySymbols(sampledFrames.slice(start, start + repeatFrames)));
-        if (decoded.ok && !byChunk.has(decoded.chunkIndex)) {
-          byChunk.set(decoded.chunkIndex, decoded);
+        const key = decodedChunkKey(decoded);
+        if (decoded.ok && !byChunk.has(key)) {
+          byChunk.set(key, decoded);
         }
       } catch {
         // Compression damage can still make a whole repeated group undecodable.
@@ -1095,6 +1099,10 @@ function expandParityMembers(header: Header) {
   const lengths = new Array<number>(count).fill(PAYLOAD_BYTES_PER_IMAGE);
   if (count && header.parityLastMemberLength !== undefined) lengths[count - 1] = header.parityLastMemberLength;
   return { indexes, lengths };
+}
+
+function decodedChunkKey(chunk: DecodeResult) {
+  return `${chunk.kind}:${chunk.chunkIndex}:${chunk.parityRow ?? 0}`;
 }
 
 function majoritySymbols(groups: number[][]) {
