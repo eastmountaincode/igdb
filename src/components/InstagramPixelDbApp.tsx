@@ -492,7 +492,10 @@ export function InstagramPixelDbApp() {
           <fieldset className="panel about-panel">
             <legend>about</legend>
             <p>
-              Normal Shopkeep is a website for using Instagram as a community flash drive. Use Write to upload files and Read to download them.
+              Normal Shopkeep is a website facilitating the use of Instagram as a community flash drive.
+            </p>
+            <p>
+              Use Write to upload files and Read to download them.
             </p>
             <h2>to write a file</h2>
             <ol>
@@ -507,7 +510,7 @@ export function InstagramPixelDbApp() {
             </p>
             <h2>to make a share link</h2>
             <p>
-              Open Make a share link and enter the URL of a Normal Shopkeep post. The resulting link takes a person directly to Read with that post already filled in.
+              Open Make a share link and enter the URL of a post. The resulting link takes a person directly to the Read page with that post already filled in.
             </p>
             <p>
               Normal Shopkeep is named after the shopkeep in <a href="https://www.youtube.com/watch?v=_F9EMbkvLBQ" target="_blank" rel="noreferrer">this video</a>.
