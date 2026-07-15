@@ -29,7 +29,8 @@ export const PAYLOAD_BYTES_PER_IMAGE = RAW_CHUNK_BYTES - HEADER_BYTES;
 export const VIDEO_FPS = 30;
 export const VIDEO_REPEAT_FRAMES = 3;
 const INSTAGRAM_MIN_VIDEO_SECONDS = 3;
-export const VIDEO_PARITY_GROUP_SIZE = 16;
+export const VIDEO_PARITY_GROUP_SIZE = 64;
+export const VIDEO_PARITY_FRAMES_PER_GROUP = 4;
 export const VIDEO_TARGET_SECONDS = 56;
 const VIDEO_STARTUP_DUPLICATE_FRAMES = 8;
 const AUDIO_PACKETS_PER_VIDEO = Math.floor(VIDEO_TARGET_SECONDS / AUDIO_PROBE_DURATION_SECONDS);
@@ -37,7 +38,7 @@ const AUDIO_PAYLOAD_BYTES = AUDIO_PACKETS_PER_VIDEO * AUDIO_PROBE_PAYLOAD_BYTES;
 export const VIDEO_BITRATE = 6_000_000;
 export const VIDEO_EFFECTIVE_BYTES_PER_SECOND = Math.floor(
   (PAYLOAD_BYTES_PER_IMAGE * VIDEO_FPS * VIDEO_PARITY_GROUP_SIZE) /
-    (VIDEO_REPEAT_FRAMES * (VIDEO_PARITY_GROUP_SIZE + 1))
+    (VIDEO_REPEAT_FRAMES * (VIDEO_PARITY_GROUP_SIZE + VIDEO_PARITY_FRAMES_PER_GROUP))
 );
 export const VIDEO_TARGET_BYTES =
   maxDataChunksForTargetVideo(VIDEO_REPEAT_FRAMES, VIDEO_TARGET_SECONDS) * PAYLOAD_BYTES_PER_IMAGE;
@@ -63,6 +64,7 @@ export type DecodeResult = {
   message: string;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
+  parityRow?: number;
 };
 
 export type FileManifest = {
@@ -125,11 +127,12 @@ type Header = {
   parityStartIndex?: number;
   parityMemberCount?: number;
   parityLastMemberLength?: number;
+  parityRow?: number;
 };
 
 type CompactHeader = {
   v: 2;
-  k: "d" | "x";
+  k: "d" | "x" | "r";
   n: string;
   m: string;
   s: number;
@@ -143,9 +146,10 @@ type CompactHeader = {
   p?: number;
   q?: number;
   r?: number;
+  u?: number;
 };
 
-type ChunkKind = "data" | "xor";
+type ChunkKind = "data" | "xor" | "rs";
 type FrameSource = HTMLCanvasElement | ImageBitmap;
 
 type RenderChunkJob = {
@@ -248,7 +252,7 @@ export function capacitySummary() {
     videoMaxVisualPayloadBytes,
     videoMaxAudioPayloadBytes: AUDIO_PAYLOAD_BYTES,
     videoMaxAudioPackets: AUDIO_PACKETS_PER_VIDEO,
-    videoMaxTransmittedChunks: videoMaxDataChunks + Math.ceil(videoMaxDataChunks / VIDEO_PARITY_GROUP_SIZE)
+    videoMaxTransmittedChunks: videoMaxDataChunks + Math.ceil(videoMaxDataChunks / VIDEO_PARITY_GROUP_SIZE) * VIDEO_PARITY_FRAMES_PER_GROUP
   };
 }
 
@@ -425,7 +429,7 @@ async function encodeVideoSegment({
   const chunkStart = segmentIndex * maxDataChunksPerVideo;
   const chunkEnd = Math.min(totalChunks, chunkStart + maxDataChunksPerVideo);
   const dataChunkCount = chunkEnd - chunkStart;
-  const parityChunks = Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE);
+  const parityChunks = Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE) * VIDEO_PARITY_FRAMES_PER_GROUP;
   const totalCanvasWork = dataChunkCount + parityChunks;
   const dataPayloads: Uint8Array[] = [];
   const renderJobs: RenderChunkJob[] = [];
@@ -457,33 +461,35 @@ async function encodeVideoSegment({
     await yieldToBrowser();
   }
 
-  let parityIndex = Math.floor(chunkStart / VIDEO_PARITY_GROUP_SIZE);
+  let parityIndex = Math.floor(chunkStart / VIDEO_PARITY_GROUP_SIZE) * VIDEO_PARITY_FRAMES_PER_GROUP;
   for (let groupStart = 0; groupStart < dataPayloads.length; groupStart += VIDEO_PARITY_GROUP_SIZE) {
     const group = dataPayloads.slice(groupStart, groupStart + VIDEO_PARITY_GROUP_SIZE);
-    const parityPayload = xorPayloads(group);
     const parityStartIndex = chunkStart + groupStart;
-    renderJobs.push({
-      order: renderJobs.length,
-      header: {
-        kind: "xor",
-        fileName: file.name,
-        mimeType: file.type || "application/octet-stream",
-        fileSize: bytes.length,
-        fileHash,
-        chunkIndex: totalChunks + parityIndex,
-        totalChunks,
-        payloadLength: parityPayload.length,
-        chunkCrc: crc32(parityPayload),
-        parityStartIndex,
-        parityMemberCount: group.length,
-        parityLastMemberLength: group.at(-1)?.length
-      },
-      payload: parityPayload
-    });
-    parityIndex++;
-    preparedChunks++;
-    onProgress?.({ phase: `Preparing chunks${segmentLabel}`, completed: preparedChunks, total: totalCanvasWork });
-    await yieldToBrowser();
+    for (const [parityRow, parityPayload] of buildReedSolomonParity(group).entries()) {
+      renderJobs.push({
+        order: renderJobs.length,
+        header: {
+          kind: "rs",
+          fileName: file.name,
+          mimeType: file.type || "application/octet-stream",
+          fileSize: bytes.length,
+          fileHash,
+          chunkIndex: totalChunks + parityIndex,
+          totalChunks,
+          payloadLength: parityPayload.length,
+          chunkCrc: crc32(parityPayload),
+          parityStartIndex,
+          parityMemberCount: group.length,
+          parityLastMemberLength: group.at(-1)?.length,
+          parityRow
+        },
+        payload: parityPayload
+      });
+      parityIndex++;
+      preparedChunks++;
+      onProgress?.({ phase: `Preparing chunks${segmentLabel}`, completed: preparedChunks, total: totalCanvasWork });
+      await yieldToBrowser();
+    }
   }
 
   const orderedRenderJobs = interleaveParityGroups(renderJobs, dataChunkCount);
@@ -521,7 +527,7 @@ async function encodeVideoSegment({
       `chunks=${renderJobs.length}`,
       `fps=${VIDEO_FPS}`,
       `repeat=${repeatFrames}`,
-      `parity=xor-${VIDEO_PARITY_GROUP_SIZE}+1`,
+      `parity=rs-${VIDEO_PARITY_GROUP_SIZE}+${VIDEO_PARITY_FRAMES_PER_GROUP}`,
       `codec=colorgrid${palette.length}-h264-mp4`,
       `size=${bytes.length}`,
       `sha256=${fileHash}`
@@ -565,7 +571,7 @@ function planHybridSegments(fileSize: number, maxVisualChunksPerVideo: number): 
 function transmittedFrameCountForDataChunks(dataChunkCount: number) {
   if (dataChunkCount <= 0) return 0;
   return dataChunkCount
-    + Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE)
+    + Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE) * VIDEO_PARITY_FRAMES_PER_GROUP
     + Math.min(dataChunkCount, VIDEO_STARTUP_DUPLICATE_FRAMES);
 }
 
@@ -580,7 +586,7 @@ async function encodeHybridVideoSegment({
   onProgress
 }: EncodeHybridSegmentInput): Promise<EncodedVideo> {
   const dataChunkCount = segment.visualChunks.length;
-  const parityChunks = Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE);
+  const parityChunks = Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE) * VIDEO_PARITY_FRAMES_PER_GROUP;
   const totalCanvasWork = dataChunkCount + parityChunks;
   const dataPayloads: Uint8Array[] = [];
   const renderJobs: RenderChunkJob[] = [];
@@ -611,33 +617,35 @@ async function encodeHybridVideoSegment({
     await yieldToBrowser();
   }
 
-  let parityIndex = Math.floor((segment.visualChunks[0]?.chunkIndex ?? 0) / VIDEO_PARITY_GROUP_SIZE);
+  let parityIndex = Math.floor((segment.visualChunks[0]?.chunkIndex ?? 0) / VIDEO_PARITY_GROUP_SIZE) * VIDEO_PARITY_FRAMES_PER_GROUP;
   for (let groupStart = 0; groupStart < dataPayloads.length; groupStart += VIDEO_PARITY_GROUP_SIZE) {
     const group = dataPayloads.slice(groupStart, groupStart + VIDEO_PARITY_GROUP_SIZE);
-    const parityPayload = xorPayloads(group);
     const parityStartIndex = segment.visualChunks[groupStart].chunkIndex;
-    renderJobs.push({
-      order: renderJobs.length,
-      header: {
-        kind: "xor",
-        fileName: file.name,
-        mimeType: file.type || "application/octet-stream",
-        fileSize: bytes.length,
-        fileHash,
-        chunkIndex: totalChunks + parityIndex,
-        totalChunks,
-        payloadLength: parityPayload.length,
-        chunkCrc: crc32(parityPayload),
-        parityStartIndex,
-        parityMemberCount: group.length,
-        parityLastMemberLength: group.at(-1)?.length
-      },
-      payload: parityPayload
-    });
-    parityIndex++;
-    preparedChunks++;
-    onProgress?.({ phase: `Preparing chunks${segmentLabel}`, completed: preparedChunks, total: totalCanvasWork });
-    await yieldToBrowser();
+    for (const [parityRow, parityPayload] of buildReedSolomonParity(group).entries()) {
+      renderJobs.push({
+        order: renderJobs.length,
+        header: {
+          kind: "rs",
+          fileName: file.name,
+          mimeType: file.type || "application/octet-stream",
+          fileSize: bytes.length,
+          fileHash,
+          chunkIndex: totalChunks + parityIndex,
+          totalChunks,
+          payloadLength: parityPayload.length,
+          chunkCrc: crc32(parityPayload),
+          parityStartIndex,
+          parityMemberCount: group.length,
+          parityLastMemberLength: group.at(-1)?.length,
+          parityRow
+        },
+        payload: parityPayload
+      });
+      parityIndex++;
+      preparedChunks++;
+      onProgress?.({ phase: `Preparing chunks${segmentLabel}`, completed: preparedChunks, total: totalCanvasWork });
+      await yieldToBrowser();
+    }
   }
 
   const audioPayloads = segment.audioChunks.map((chunk) => bytes.slice(chunk.payloadStart, chunk.payloadStart + chunk.payloadLength));
@@ -690,7 +698,7 @@ async function encodeHybridVideoSegment({
       `chunks=${renderJobs.length}`,
       `fps=${VIDEO_FPS}`,
       `repeat=${repeatFrames}`,
-      `parity=xor-${VIDEO_PARITY_GROUP_SIZE}+1`,
+      `parity=rs-${VIDEO_PARITY_GROUP_SIZE}+${VIDEO_PARITY_FRAMES_PER_GROUP}`,
       `codec=colorgrid${palette.length}-h264-mp4+dtmf16-aac`,
       `durationTarget=${VIDEO_TARGET_SECONDS}`,
       `size=${bytes.length}`,
@@ -1072,7 +1080,8 @@ function decodeChunkBytes(allBytes: Uint8Array): DecodeResult {
     payload,
     message: crcOk ? "decoded" : "decoded with checksum mismatch",
     parityMemberIndexes: parityMembers.indexes,
-    parityMemberLengths: parityMembers.lengths
+    parityMemberLengths: parityMembers.lengths,
+    parityRow: header.parityRow
   };
 }
 
@@ -1133,6 +1142,7 @@ export async function reassemble(results: DecodeResult[]): Promise<{ blob: Blob;
 export function recoverDataChunks(results: DecodeResult[]) {
   const dataByIndex = new Map<number, DecodeResult>();
   const parityChunks = results.filter((chunk) => chunk.ok && chunk.kind === "xor");
+  const rsChunks = results.filter((chunk) => chunk.ok && chunk.kind === "rs");
   for (const chunk of results) {
     if (chunk.ok && chunk.kind === "data") dataByIndex.set(chunk.chunkIndex, chunk);
   }
@@ -1167,6 +1177,19 @@ export function recoverDataChunks(results: DecodeResult[]) {
       });
       madeProgress = true;
     }
+  }
+
+  const rsGroups = new Map<string, DecodeResult[]>();
+  for (const parity of rsChunks) {
+    const indexes = parity.parityMemberIndexes ?? [];
+    if (!indexes.length || parity.parityRow === undefined) continue;
+    const key = indexes.join(",");
+    const group = rsGroups.get(key) ?? [];
+    group.push(parity);
+    rsGroups.set(key, group);
+  }
+  for (const group of rsGroups.values()) {
+    recoverReedSolomonGroup(group, dataByIndex);
   }
 
   return [...dataByIndex.values()].sort((a, b) => a.chunkIndex - b.chunkIndex);
@@ -1225,6 +1248,124 @@ function xorPayloads(payloads: Uint8Array[]) {
     for (let i = 0; i < payload.length; i++) out[i] ^= payload[i];
   }
   return out;
+}
+
+export function buildReedSolomonParity(payloads: Uint8Array[]) {
+  return Array.from({ length: VIDEO_PARITY_FRAMES_PER_GROUP }, (_, parityRow) => {
+    const out = new Uint8Array(PAYLOAD_BYTES_PER_IMAGE);
+    for (let member = 0; member < payloads.length; member++) {
+      const coefficient = reedSolomonCoefficient(parityRow, member);
+      const payload = payloads[member];
+      for (let index = 0; index < payload.length; index++) {
+        out[index] ^= gfMultiply(coefficient, payload[index]);
+      }
+    }
+    return out;
+  });
+}
+
+function recoverReedSolomonGroup(parityFrames: DecodeResult[], dataByIndex: Map<number, DecodeResult>) {
+  const reference = parityFrames[0];
+  const indexes = reference.parityMemberIndexes ?? [];
+  const lengths = reference.parityMemberLengths ?? [];
+  const missingIndexes = indexes.filter((index) => !dataByIndex.has(index));
+  if (!missingIndexes.length || missingIndexes.length > parityFrames.length) return;
+
+  const selectedFrames = [...parityFrames]
+    .sort((left, right) => (left.parityRow ?? 0) - (right.parityRow ?? 0))
+    .slice(0, missingIndexes.length);
+  const missingMembers = missingIndexes.map((index) => indexes.indexOf(index));
+  const matrix = selectedFrames.map((frame) =>
+    missingMembers.map((member) => reedSolomonCoefficient(frame.parityRow ?? 0, member))
+  );
+  const inverse = invertGaloisMatrix(matrix);
+  if (!inverse) return;
+
+  const recovered = missingIndexes.map(() => new Uint8Array(PAYLOAD_BYTES_PER_IMAGE));
+  for (let byteIndex = 0; byteIndex < PAYLOAD_BYTES_PER_IMAGE; byteIndex++) {
+    const rightSide = selectedFrames.map((frame) => {
+      let value = frame.payload[byteIndex] ?? 0;
+      for (let member = 0; member < indexes.length; member++) {
+        const known = dataByIndex.get(indexes[member]);
+        if (!known) continue;
+        value ^= gfMultiply(reedSolomonCoefficient(frame.parityRow ?? 0, member), known.payload[byteIndex] ?? 0);
+      }
+      return value;
+    });
+    for (let missing = 0; missing < recovered.length; missing++) {
+      let value = 0;
+      for (let row = 0; row < rightSide.length; row++) {
+        value ^= gfMultiply(inverse[missing][row], rightSide[row]);
+      }
+      recovered[missing][byteIndex] = value;
+    }
+  }
+
+  for (let missing = 0; missing < missingIndexes.length; missing++) {
+    const member = missingMembers[missing];
+    dataByIndex.set(missingIndexes[missing], {
+      ...reference,
+      kind: "data",
+      chunkIndex: missingIndexes[missing],
+      payload: recovered[missing].slice(0, lengths[member] ?? PAYLOAD_BYTES_PER_IMAGE),
+      message: "recovered from Reed-Solomon parity",
+      parityMemberIndexes: undefined,
+      parityMemberLengths: undefined,
+      parityRow: undefined
+    });
+  }
+}
+
+function reedSolomonCoefficient(parityRow: number, member: number) {
+  return gfInverse((member + 1) ^ (0x80 + parityRow));
+}
+
+function gfMultiply(left: number, right: number) {
+  let a = left;
+  let b = right;
+  let product = 0;
+  while (b) {
+    if (b & 1) product ^= a;
+    const highBit = a & 0x80;
+    a = (a << 1) & 0xff;
+    if (highBit) a ^= 0x1d;
+    b >>>= 1;
+  }
+  return product;
+}
+
+function gfPower(value: number, exponent: number) {
+  let result = 1;
+  for (let index = 0; index < exponent; index++) result = gfMultiply(result, value);
+  return result;
+}
+
+function gfInverse(value: number) {
+  if (!value) throw new Error("Cannot invert zero in GF(256).");
+  return gfPower(value, 254);
+}
+
+function invertGaloisMatrix(input: number[][]) {
+  const size = input.length;
+  const matrix = input.map((row, index) => [
+    ...row,
+    ...Array.from({ length: size }, (_, column) => column === index ? 1 : 0)
+  ]);
+  for (let column = 0; column < size; column++) {
+    const pivot = matrix.findIndex((row, index) => index >= column && row[column] !== 0);
+    if (pivot < 0) return null;
+    [matrix[column], matrix[pivot]] = [matrix[pivot], matrix[column]];
+    const scale = gfInverse(matrix[column][column]);
+    for (let index = 0; index < size * 2; index++) matrix[column][index] = gfMultiply(matrix[column][index], scale);
+    for (let row = 0; row < size; row++) {
+      if (row === column || matrix[row][column] === 0) continue;
+      const factor = matrix[row][column];
+      for (let index = 0; index < size * 2; index++) {
+        matrix[row][index] ^= gfMultiply(factor, matrix[column][index]);
+      }
+    }
+  }
+  return matrix.map((row) => row.slice(size));
 }
 
 function padAudioPayload(payload: Uint8Array) {
@@ -1803,7 +1944,7 @@ function packChunk(header: Header, payload: Uint8Array) {
 function compactHeader(header: Header): CompactHeader {
   return {
     v: 2,
-    k: header.kind === "xor" ? "x" : "d",
+    k: header.kind === "xor" ? "x" : header.kind === "rs" ? "r" : "d",
     n: header.fileName,
     m: header.mimeType,
     s: header.fileSize,
@@ -1816,14 +1957,15 @@ function compactHeader(header: Header): CompactHeader {
     b: header.parityMemberLengths,
     p: header.parityStartIndex,
     q: header.parityMemberCount,
-    r: header.parityLastMemberLength
+    r: header.parityLastMemberLength,
+    u: header.parityRow
   };
 }
 
 function normalizeHeader(header: Header | CompactHeader): Header {
   if (!("v" in header)) return header;
   return {
-    kind: header.k === "x" ? "xor" : "data",
+    kind: header.k === "x" ? "xor" : header.k === "r" ? "rs" : "data",
     fileName: header.n,
     mimeType: header.m,
     fileSize: header.s,
@@ -1836,7 +1978,8 @@ function normalizeHeader(header: Header | CompactHeader): Header {
     parityMemberLengths: header.b,
     parityStartIndex: header.p,
     parityMemberCount: header.q,
-    parityLastMemberLength: header.r
+    parityLastMemberLength: header.r,
+    parityRow: header.u
   };
 }
 
@@ -1988,7 +2131,7 @@ function colorDistance(a: number[], b: number[]) {
 }
 
 function requiredContext(canvas: HTMLCanvasElement) {
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const ctx = canvas.getContext("2d", { willReadFrequently: true, colorSpace: "srgb" });
   if (!ctx) throw new Error("2D canvas is unavailable.");
   return ctx;
 }

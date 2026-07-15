@@ -202,7 +202,7 @@ function frameIndexAtTime(durations: number[], timeMs: number) {
 }
 
 function requiredContext(canvas: HTMLCanvasElement) {
-  const context = canvas.getContext("2d", { willReadFrequently: true });
+  const context = canvas.getContext("2d", { willReadFrequently: true, colorSpace: "srgb" });
   if (!context) throw new Error("Canvas is unavailable.");
   return context;
 }

@@ -5,7 +5,7 @@ const VERSION = 1;
 const SYMBOL_BLOCK_BYTES = 8;
 const SYMBOL_BLOCK_SIZE = 25;
 
-type ChunkKind = "data" | "xor";
+type ChunkKind = "data" | "xor" | "rs";
 
 type Header = {
   kind?: ChunkKind;
@@ -22,11 +22,12 @@ type Header = {
   parityStartIndex?: number;
   parityMemberCount?: number;
   parityLastMemberLength?: number;
+  parityRow?: number;
 };
 
 type CompactHeader = {
   v: 2;
-  k: "d" | "x";
+  k: "d" | "x" | "r";
   n: string;
   m: string;
   s: number;
@@ -40,6 +41,7 @@ type CompactHeader = {
   p?: number;
   q?: number;
   r?: number;
+  u?: number;
 };
 
 type WorkerCodecProfile = {
@@ -73,6 +75,7 @@ type DecodeResult = {
   message: string;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
+  parityRow?: number;
 };
 
 const decoder = new TextDecoder();
@@ -135,14 +138,15 @@ function decodeChunkBytes(profile: WorkerCodecProfile, allBytes: Uint8Array): De
     payload: payloadBuffer,
     message: crcOk ? "decoded" : "decoded with checksum mismatch",
     parityMemberIndexes: parityMembers.indexes,
-    parityMemberLengths: parityMembers.lengths
+    parityMemberLengths: parityMembers.lengths,
+    parityRow: header.parityRow
   };
 }
 
 function normalizeHeader(header: Header | CompactHeader): Header {
   if (!("v" in header)) return header;
   return {
-    kind: header.k === "x" ? "xor" : "data",
+    kind: header.k === "x" ? "xor" : header.k === "r" ? "rs" : "data",
     fileName: header.n,
     mimeType: header.m,
     fileSize: header.s,
@@ -155,7 +159,8 @@ function normalizeHeader(header: Header | CompactHeader): Header {
     parityMemberLengths: header.b,
     parityStartIndex: header.p,
     parityMemberCount: header.q,
-    parityLastMemberLength: header.r
+    parityLastMemberLength: header.r,
+    parityRow: header.u
   };
 }
 

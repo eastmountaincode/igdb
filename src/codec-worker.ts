@@ -5,7 +5,7 @@ const VERSION = 1;
 const SYMBOL_BLOCK_BYTES = 8;
 const SYMBOL_BLOCK_SIZE = 25;
 
-type ChunkKind = "data" | "xor";
+type ChunkKind = "data" | "xor" | "rs";
 
 type Header = {
   kind?: ChunkKind;
@@ -22,11 +22,12 @@ type Header = {
   parityStartIndex?: number;
   parityMemberCount?: number;
   parityLastMemberLength?: number;
+  parityRow?: number;
 };
 
 type CompactHeader = {
   v: 2;
-  k: "d" | "x";
+  k: "d" | "x" | "r";
   n: string;
   m: string;
   s: number;
@@ -40,6 +41,7 @@ type CompactHeader = {
   p?: number;
   q?: number;
   r?: number;
+  u?: number;
 };
 
 type WorkerCodecProfile = {
@@ -127,7 +129,7 @@ function packChunk(profile: WorkerCodecProfile, header: Header, payload: Uint8Ar
 function compactHeader(header: Header): CompactHeader {
   return {
     v: 2,
-    k: header.kind === "xor" ? "x" : "d",
+    k: header.kind === "xor" ? "x" : header.kind === "rs" ? "r" : "d",
     n: header.fileName,
     m: header.mimeType,
     s: header.fileSize,
@@ -140,7 +142,8 @@ function compactHeader(header: Header): CompactHeader {
     b: header.parityMemberLengths,
     p: header.parityStartIndex,
     q: header.parityMemberCount,
-    r: header.parityLastMemberLength
+    r: header.parityLastMemberLength,
+    u: header.parityRow
   };
 }
 
@@ -195,7 +198,7 @@ function drawCalibration(profile: WorkerCodecProfile, ctx: OffscreenCanvasRender
 }
 
 function requiredContext(canvas: OffscreenCanvas) {
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { colorSpace: "srgb" });
   if (!ctx) throw new Error("2D canvas is unavailable.");
   return ctx;
 }
