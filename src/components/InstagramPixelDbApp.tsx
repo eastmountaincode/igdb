@@ -510,8 +510,12 @@ export function InstagramPixelDbApp() {
               Open Make a share link and enter the URL of a Normal Shopkeep post. The resulting link takes a person directly to Read with that post already filled in.
             </p>
             <p>
-              Normal Shopkeep is named after the Shopkeep in Ian Worthington&rsquo;s <a href="https://www.youtube.com/watch?v=_F9EMbkvLBQ&amp;t=10s" target="_blank" rel="noreferrer">Justice Free Apple</a>.
+              Normal Shopkeep is named after the shopkeep in <a href="https://www.youtube.com/watch?v=_F9EMbkvLBQ" target="_blank" rel="noreferrer">this video</a>.
             </p>
+            <p>
+              Made by <a href="https://www.andrew-boylan.com/" target="_blank" rel="noreferrer">Andrew Boylan</a>.
+            </p>
+
           </fieldset>
         </section>
       ) : activeTab === "share" ? (

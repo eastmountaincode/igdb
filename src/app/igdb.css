@@ -215,6 +215,10 @@ table {
   padding-left: 1.5rem;
 }
 
+.about-panel a {
+  text-decoration: underline;
+}
+
 .dropzone {
   display: grid;
   gap: 0.35rem;
