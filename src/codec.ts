@@ -906,6 +906,7 @@ export async function decodeVideoFileTemporalVote(
     const duration = Number.isFinite(video.duration) ? video.duration : 0;
     const totalFrames = Math.max(1, Math.floor(duration * VIDEO_FPS));
     const sampledFrames: number[][] = [];
+    const byChunk = new Map<number, DecodeResult>();
 
     for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
       const time = Math.min(Math.max(0, (frameIndex + 0.5) / VIDEO_FPS), Math.max(0, duration - 0.001));
@@ -914,12 +915,20 @@ export async function decodeVideoFileTemporalVote(
       ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
       ctx.drawImage(video, 0, 0, CANVAS_SIZE, CANVAS_SIZE);
       const imageData = ctx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE).data;
-      sampledFrames.push(readSymbolsFromImageData(imageData));
+      const symbols = readSymbolsFromImageData(imageData);
+      sampledFrames.push(symbols);
+      try {
+        const decoded = decodeSymbols(symbols);
+        if (decoded.ok && !byChunk.has(decoded.chunkIndex)) {
+          byChunk.set(decoded.chunkIndex, decoded);
+        }
+      } catch {
+        // Temporal voting below recovers frames damaged at video transitions.
+      }
       onProgress?.({ phase: "Sampling repeated frames", completed: frameIndex + 1, total: totalFrames });
       if (frameIndex % 8 === 7) await yieldToBrowser();
     }
 
-    const byChunk = new Map<number, DecodeResult>();
     const windowCount = Math.max(1, sampledFrames.length - repeatFrames + 1);
     let decodedGroups = 0;
     for (let start = 0; start < windowCount; start++) {
