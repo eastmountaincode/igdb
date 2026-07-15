@@ -502,7 +502,7 @@ export function InstagramPixelDbApp() {
               <li>Choose your file.</li>
               <li>Generate the MP4s.</li>
               <li>Add any optional information.</li>
-              <li>The data videos will automatically be posted to @normal_shopkeep. Keep the page open until publishing is complete.</li>
+              <li>Publish to Instagram and keep the page open until publishing is complete. The data videos will automatically be posted to @normal_shopkeep.</li>
             </ol>
             <h2>to read a file</h2>
             <p>
