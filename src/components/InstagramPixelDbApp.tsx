@@ -26,7 +26,7 @@ type PublishPartStatus = {
 };
 type ReadPartStatus = {
   label: string;
-  status: "waiting" | "downloading" | "downloaded" | "decoding" | "ready" | "failed";
+  status: "waiting" | "downloading" | "downloaded" | "decoding" | "decoded" | "failed";
 };
 
 export function InstagramPixelDbApp() {
@@ -258,6 +258,7 @@ export function InstagramPixelDbApp() {
           index === part ? { ...item, status: "downloaded" } : item
         ));
       }
+      setIsFetchingReadUrl(false);
       await decodeVideoFiles(videos, true, true);
     } catch (error) {
       setReadParts((current) => current.map((item) =>
@@ -330,7 +331,7 @@ export function InstagramPixelDbApp() {
         setDecodeMessages([...messages]);
         if (preserveReadStatus) {
           setReadParts((current) => current.map((item, partIndex) =>
-            partIndex === index ? { ...item, status: "ready" } : item
+            partIndex === index ? { ...item, status: "decoded" } : item
           ));
         }
       }
