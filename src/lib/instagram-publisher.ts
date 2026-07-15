@@ -134,16 +134,14 @@ export async function stageInstagramVideoPart(input: {
   try {
     if (input.displayCover && input.partIndex === 0) {
       await normalizeCoverVideo(inputPath, join(directory, fileName));
-    } else if (input.audioPayload) {
-      await muxDtmfAudio(
+    } else {
+      await normalizeDataVideo(
         inputPath,
         join(directory, fileName),
-        new Uint8Array(await input.audioPayload.arrayBuffer()),
+        input.audioPayload ? new Uint8Array(await input.audioPayload.arrayBuffer()) : undefined,
         directory,
         input.partIndex
       );
-    } else {
-      await writeFile(join(directory, fileName), Buffer.from(await input.video.arrayBuffer()));
     }
   } finally {
     await rm(inputPath, { force: true });
@@ -363,13 +361,14 @@ async function stageJob(videos: File[], audioPayloads: File[], metadata: Instagr
     const fileName = `part-${String(index + 1).padStart(2, "0")}.mp4`;
     const inputPath = join(directory, `input-${String(index + 1).padStart(2, "0")}.mp4`);
     await writeFile(inputPath, Buffer.from(await videos[index].arrayBuffer()));
-    if (audioPayloads[index]) {
-      await muxDtmfAudio(inputPath, join(directory, fileName), new Uint8Array(await audioPayloads[index].arrayBuffer()), directory, index);
-      await rm(inputPath, { force: true });
-    } else {
-      await writeFile(join(directory, fileName), Buffer.from(await videos[index].arrayBuffer()));
-      await rm(inputPath, { force: true });
-    }
+    await normalizeDataVideo(
+      inputPath,
+      join(directory, fileName),
+      audioPayloads[index] ? new Uint8Array(await audioPayloads[index].arrayBuffer()) : undefined,
+      directory,
+      index
+    );
+    await rm(inputPath, { force: true });
     files.push(fileName);
   }
 
@@ -483,26 +482,47 @@ async function waitForPublishedPermalink(mediaId: string, accessToken: string) {
 }
 
 export async function muxDtmfAudio(inputPath: string, outputPath: string, payload: Uint8Array, directory: string, index: number) {
+  await normalizeDataVideo(inputPath, outputPath, payload, directory, index);
+}
+
+async function normalizeDataVideo(
+  inputPath: string,
+  outputPath: string,
+  payload: Uint8Array | undefined,
+  directory: string,
+  index: number
+) {
   const packets: Uint8Array[] = [];
-  for (let offset = 0; offset < payload.length; offset += 16) {
-    packets.push(payload.slice(offset, offset + 16));
+  for (let offset = 0; offset < (payload?.length ?? 0); offset += 16) {
+    packets.push(payload!.slice(offset, offset + 16));
   }
-  const samples = synthesizeDtmfProbePackets(packets);
   const wavPath = join(directory, `audio-${String(index + 1).padStart(2, "0")}.wav`);
-  await writeFile(wavPath, encodeMonoPcm16Wav(samples, AUDIO_PROBE_SAMPLE_RATE));
+  if (packets.length) {
+    const samples = synthesizeDtmfProbePackets(packets);
+    await writeFile(wavPath, encodeMonoPcm16Wav(samples, AUDIO_PROBE_SAMPLE_RATE));
+  }
   try {
-    await execFileAsync("ffmpeg", [
+    const args = [
       "-hide_banner", "-loglevel", "error", "-y",
       "-i", inputPath,
-      "-i", wavPath,
+      ...(packets.length ? ["-i", wavPath] : []),
       "-map", "0:v:0",
-      "-map", "1:a:0",
-      "-c:v", "copy",
-      "-c:a", "aac",
-      "-b:a", "128k",
+      ...(packets.length ? ["-map", "1:a:0"] : []),
+      "-vf", "select=not(mod(n\\,3)),setpts=N/(10*TB)",
+      "-c:v", "libx264",
+      "-preset", "veryfast",
+      "-tune", "animation",
+      "-b:v", "6M",
+      "-maxrate", "6M",
+      "-bufsize", "12M",
+      "-g", "1",
+      "-r", "10",
+      "-pix_fmt", "yuv420p",
+      ...(packets.length ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
       "-movflags", "+faststart",
       outputPath
-    ]);
+    ];
+    await execFileAsync("ffmpeg", args);
   } finally {
     await rm(wavPath, { force: true });
   }
