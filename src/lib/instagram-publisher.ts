@@ -313,7 +313,7 @@ async function publishQueuedJobWithRetry(job: StagedJob) {
 
 function isTransientPublishError(error: unknown) {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
-  return /rate|temporar|timeout|timed out|network|fetch|try again|code 4/.test(message);
+  return /rate|temporar|timeout|timed out|network|fetch|try again|code 4|could not process/.test(message);
 }
 
 async function queueLockIsStale() {
