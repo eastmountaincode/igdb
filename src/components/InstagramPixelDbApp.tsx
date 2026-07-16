@@ -382,6 +382,24 @@ export function InstagramPixelDbApp() {
     }
     setIsPreparingRecoveredDownload(true);
     try {
+      const recoveredBrowserFile = new File([file.blob], file.fileName, {
+        type: file.blob.type || "application/octet-stream"
+      });
+      const isInstagramBrowser = /Instagram/i.test(navigator.userAgent);
+      const canShareFile = typeof navigator.share === "function"
+        && typeof navigator.canShare === "function"
+        && navigator.canShare({ files: [recoveredBrowserFile] });
+
+      if (isInstagramBrowser && canShareFile) {
+        await navigator.share({ files: [recoveredBrowserFile] });
+        setHasDownloadedRecoveredFile(true);
+        setDecodeMessages((current) => [
+          ...current,
+          `Sent ${file.fileName} to the save/share menu. SHA-256 OK.`
+        ]);
+        return;
+      }
+
       const form = new FormData();
       form.append("file", file.blob, file.fileName);
       const response = await fetch("/api/recovered-download", { method: "POST", body: form });
@@ -389,13 +407,14 @@ export function InstagramPixelDbApp() {
       if (!response.ok || !result.downloadUrl) {
         throw new Error(result.error || "Download could not be prepared.");
       }
-      setHasDownloadedRecoveredFile(true);
       setDecodeMessages((current) => [
         ...current,
-        `Downloading ${file.fileName}. SHA-256 OK.`
+        `Opening the download for ${file.fileName}. SHA-256 OK.`
       ]);
       window.location.assign(result.downloadUrl);
+      setHasDownloadedRecoveredFile(true);
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
       setDecodeMessages((current) => [
         ...current,
         error instanceof Error ? error.message : "Download could not be prepared."
