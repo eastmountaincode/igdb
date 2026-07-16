@@ -46,3 +46,4 @@ pnpm-debug.log*
 .instagram-uploads/
 .instagram-media-index.json
 .instagram-publication-status.json
+.recovered-downloads/

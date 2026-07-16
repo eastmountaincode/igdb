@@ -3,7 +3,6 @@
 import { useEffect, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import {
   decodeVideoFile,
-  downloadBlob,
   encodeFileAsVideos,
   formatBytes,
   reassemble,
@@ -41,6 +40,7 @@ export function InstagramPixelDbApp() {
   const [decodedChunks, setDecodedChunks] = useState<DecodeResult[]>([]);
   const [recoveredFile, setRecoveredFile] = useState<{ blob: Blob; fileName: string } | null>(null);
   const [hasDownloadedRecoveredFile, setHasDownloadedRecoveredFile] = useState(false);
+  const [isPreparingRecoveredDownload, setIsPreparingRecoveredDownload] = useState(false);
   const [decodeMessages, setDecodeMessages] = useState<string[]>([]);
   const [isEncodingVideo, setIsEncodingVideo] = useState(false);
   const [encodeError, setEncodeError] = useState("");
@@ -366,7 +366,7 @@ export function InstagramPixelDbApp() {
   }
 
   async function handleAssemble() {
-    if (hasDownloadedRecoveredFile) return;
+    if (hasDownloadedRecoveredFile || isPreparingRecoveredDownload) return;
     let file = recoveredFile;
     if (!file) {
       const assembled = await reassemble(decodedChunks);
@@ -380,12 +380,29 @@ export function InstagramPixelDbApp() {
       file = { blob: assembled.blob, fileName: assembled.fileName };
       setRecoveredFile(file);
     }
-    setHasDownloadedRecoveredFile(true);
-    downloadBlob(file.blob, file.fileName);
-    setDecodeMessages((current) => [
-      ...current,
-      `Downloaded ${file.fileName}. SHA-256 OK.`
-    ]);
+    setIsPreparingRecoveredDownload(true);
+    try {
+      const form = new FormData();
+      form.append("file", file.blob, file.fileName);
+      const response = await fetch("/api/recovered-download", { method: "POST", body: form });
+      const result = await response.json() as { downloadUrl?: string; error?: string };
+      if (!response.ok || !result.downloadUrl) {
+        throw new Error(result.error || "Download could not be prepared.");
+      }
+      setHasDownloadedRecoveredFile(true);
+      setDecodeMessages((current) => [
+        ...current,
+        `Downloading ${file.fileName}. SHA-256 OK.`
+      ]);
+      window.location.assign(result.downloadUrl);
+    } catch (error) {
+      setDecodeMessages((current) => [
+        ...current,
+        error instanceof Error ? error.message : "Download could not be prepared."
+      ]);
+    } finally {
+      setIsPreparingRecoveredDownload(false);
+    }
   }
 
   async function handlePublishToInstagram() {
@@ -645,8 +662,8 @@ export function InstagramPixelDbApp() {
             </dl>
 
             <div className="button-row">
-              <button type="button" disabled={!recoveredFile || hasDownloadedRecoveredFile} onClick={handleAssemble}>
-                {hasDownloadedRecoveredFile ? "Downloaded" : "Download Recovered File"}
+              <button type="button" disabled={!recoveredFile || hasDownloadedRecoveredFile || isPreparingRecoveredDownload} onClick={handleAssemble}>
+                {hasDownloadedRecoveredFile ? "Downloaded" : isPreparingRecoveredDownload ? "preparing download..." : "Download Recovered File"}
               </button>
               {recoveredFile && !hasDownloadedRecoveredFile ? <span className="next-step-arrow" aria-hidden="true">←</span> : null}
             </div>
