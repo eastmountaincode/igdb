@@ -319,7 +319,7 @@ export function InstagramPixelDbApp() {
         const recoveredChunks = chunks.filter((chunk) => chunk.ok && chunk.kind === "data");
         for (const chunk of recoveredChunks) {
           const existing = recoveredByIndex.get(chunk.chunkIndex);
-          if (!existing || (existing.message.includes("audio side channel") && !chunk.message.includes("audio side channel"))) {
+          if (!existing || !chunk.message.includes("audio side channel")) {
             recoveredByIndex.set(chunk.chunkIndex, chunk);
           }
         }
