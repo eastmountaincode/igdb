@@ -475,6 +475,43 @@ export function InstagramPixelDbApp() {
       );
       const uploadId = firstUpload.uploadId;
       const uploadToken = firstUpload.uploadToken;
+      setPublishMessage("Verifying the normalized videos before publishing...");
+      const normalizedChunks = new Map<number, DecodeResult>();
+      for (let index = 1; index < uploadParts.length; index += 1) {
+        const stagedName = `part-${String(index + 1).padStart(2, "0")}.mp4`;
+        const stagedResponse = await fetch(
+          `/api/instagram/media/${encodeURIComponent(uploadId)}/${stagedName}?token=${encodeURIComponent(uploadToken)}`,
+          { cache: "no-store" }
+        );
+        if (!stagedResponse.ok) throw new Error(`Normalized data video ${index} could not be checked.`);
+        const stagedFile = new File([await stagedResponse.blob()], stagedName, { type: "video/mp4" });
+        const chunks = await decodeVideoFile(stagedFile, (progress) => {
+          setPublishMessage(
+            `Verifying normalized video ${index} of ${uploadParts.length - 1}: ${progress.phase.toLowerCase()}...`
+          );
+        });
+        for (const chunk of chunks) {
+          if (!chunk.ok || chunk.kind !== "data") continue;
+          const existing = normalizedChunks.get(chunk.chunkIndex);
+          if (!existing || !chunk.message.includes("audio side channel")) {
+            normalizedChunks.set(chunk.chunkIndex, chunk);
+          }
+        }
+        setPublishParts((current) => current.map((part, partIndex) =>
+          partIndex === index ? { ...part, status: "ready" } : part
+        ));
+      }
+      const verifiedChunks = [...normalizedChunks.values()].sort((left, right) => left.chunkIndex - right.chunkIndex);
+      const expectedChunks = verifiedChunks[0]?.totalChunks ?? 0;
+      if (!expectedChunks || verifiedChunks.length !== expectedChunks) {
+        throw new Error(
+          `Upload stopped before Instagram: the normalized videos recovered only ${verifiedChunks.length}/${expectedChunks || "?"} chunks.`
+        );
+      }
+      const normalizedFile = await reassemble(verifiedChunks);
+      if (!normalizedFile.hashOk || normalizedFile.blob.size !== selectedFile.size) {
+        throw new Error("Upload stopped before Instagram: the normalized videos failed SHA-256 verification.");
+      }
       setPublishMessage("Publishing to @normal_shopkeep\u2026 keep this window open.");
       const requestId = publishRequestId || crypto.randomUUID();
       if (!publishRequestId) setPublishRequestId(requestId);
