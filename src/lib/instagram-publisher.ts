@@ -297,7 +297,8 @@ async function updateQueuePositions(jobs: StagedJob[]) {
 
 async function publishQueuedJobWithRetry(job: StagedJob) {
   const maximumAttempts = 2;
-  for (let attempt = job.publishAttempts ?? 0; attempt < maximumAttempts; attempt += 1) {
+  const firstAttempt = Math.min(job.publishAttempts ?? 0, maximumAttempts - 1);
+  for (let attempt = firstAttempt; attempt < maximumAttempts; attempt += 1) {
     job.publishAttempts = attempt + 1;
     await writeFile(join(JOB_ROOT, job.id, "job.json"), JSON.stringify(job));
     try {
@@ -508,7 +509,7 @@ async function normalizeDataVideo(
       ...(packets.length ? ["-i", wavPath] : []),
       "-map", "0:v:0",
       ...(packets.length ? ["-map", "1:a:0"] : []),
-      "-vf", "fps=30,scale=in_range=tv:out_range=tv:in_color_matrix=bt709:out_color_matrix=smpte170m,format=yuv420p",
+      "-vf", "fps=30,scale=in_range=tv:out_range=tv,format=yuv420p",
       "-c:v", "libx264",
       "-preset", "veryfast",
       "-tune", "animation",
@@ -627,13 +628,19 @@ async function normalizeCoverVideo(inputPath: string, outputPath: string) {
 
 async function graphPost(path: string, values: Record<string, string>, accessToken: string) {
   const body = new URLSearchParams({ ...values, access_token: accessToken });
-  const response = await fetch(`https://graph.instagram.com/${API_VERSION}${path}`, { method: "POST", body });
+  const response = await fetch(`https://graph.instagram.com/${API_VERSION}${path}`, {
+    method: "POST",
+    body,
+    signal: AbortSignal.timeout(30_000)
+  });
   return response.json() as Promise<GraphResponse>;
 }
 
 async function graphGet(path: string, values: Record<string, string>, accessToken: string) {
   const query = new URLSearchParams({ ...values, access_token: accessToken });
-  const response = await fetch(`https://graph.instagram.com/${API_VERSION}${path}?${query}`);
+  const response = await fetch(`https://graph.instagram.com/${API_VERSION}${path}?${query}`, {
+    signal: AbortSignal.timeout(30_000)
+  });
   return response.json() as Promise<GraphResponse>;
 }
 
