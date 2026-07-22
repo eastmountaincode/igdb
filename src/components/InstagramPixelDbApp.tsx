@@ -247,11 +247,20 @@ export function InstagramPixelDbApp() {
           index === part ? { ...item, status: "downloading" } : item
         ));
         setDecodeMessages([`Downloading video ${part + 1} of ${result.parts}...`]);
-        const videoResponse = await fetch(`/api/instagram/read?url=${encodeURIComponent(url)}&part=${part}`);
-        if (!videoResponse.ok) {
-          const error = await readJsonResponse(videoResponse);
-          throw new Error(error.error || `Video ${part + 1} could not be downloaded.`);
+        let videoResponse: Response | null = null;
+        let downloadError = "";
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            videoResponse = await fetch(`/api/instagram/read?url=${encodeURIComponent(url)}&part=${part}`);
+            if (videoResponse.ok) break;
+            const error = await readJsonResponse(videoResponse);
+            downloadError = error.error || `Video ${part + 1} could not be downloaded.`;
+          } catch (error) {
+            downloadError = error instanceof Error ? error.message : String(error);
+          }
+          if (attempt < 3) await new Promise((resolve) => window.setTimeout(resolve, attempt * 1000));
         }
+        if (!videoResponse?.ok) throw new Error(downloadError || `Video ${part + 1} could not be downloaded.`);
         const blob = await videoResponse.blob();
         videos.push(new File([blob], `instagram-${part + 1}.mp4`, { type: "video/mp4" }));
         setReadParts((current) => current.map((item, index) =>
@@ -293,6 +302,7 @@ export function InstagramPixelDbApp() {
     const recoveredByIndex = new Map<number, DecodeResult>();
     const messages: string[] = [];
     let mergedChunks: DecodeResult[] = [];
+    let expectedFileIdentity: string | null = null;
     try {
       for (let index = 0; index < videos.length; index++) {
         const file = videos[index];
@@ -317,6 +327,18 @@ export function InstagramPixelDbApp() {
           chunks = await decodeVideoFile(file, reportProgress);
         }
         const recoveredChunks = chunks.filter((chunk) => chunk.ok && chunk.kind === "data");
+        const fileIdentity = recoveredChunks[0]
+          ? [
+              recoveredChunks[0].fileHash,
+              recoveredChunks[0].fileSize,
+              recoveredChunks[0].totalChunks,
+              recoveredChunks[0].fileName
+            ].join(":")
+          : null;
+        if (fileIdentity && expectedFileIdentity && fileIdentity !== expectedFileIdentity) {
+          throw new Error(`Carousel data video ${index + 1} belongs to a different encoded file.`);
+        }
+        if (fileIdentity && !expectedFileIdentity) expectedFileIdentity = fileIdentity;
         for (const chunk of recoveredChunks) {
           const existing = recoveredByIndex.get(chunk.chunkIndex);
           if (!existing || !chunk.message.includes("audio side channel")) {
@@ -340,7 +362,9 @@ export function InstagramPixelDbApp() {
       if (prepareDownloadWhenComplete && totalChunks > 0 && mergedChunks.length === totalChunks) {
         setVerificationStatus("verifying");
         const assembled = await reassemble(mergedChunks);
-        if (!assembled.hashOk) throw new Error("Recovered file failed SHA-256 verification.");
+        if (!assembled.hashOk) {
+          throw new Error(`Recovered file failed SHA-256 verification (expected ${assembled.expectedHash}, got ${assembled.hash}).`);
+        }
         setVerificationStatus("ready");
         setRecoveredFile({ blob: assembled.blob, fileName: assembled.fileName });
         setHasDownloadedRecoveredFile(false);

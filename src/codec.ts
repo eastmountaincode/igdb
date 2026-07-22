@@ -122,6 +122,7 @@ type Header = {
   totalChunks: number;
   payloadLength: number;
   chunkCrc: number;
+  chunkBindingCrc?: number;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
   parityStartIndex?: number;
@@ -141,6 +142,7 @@ type CompactHeader = {
   t: number;
   l: number;
   c: number;
+  d?: number;
   a?: number[];
   b?: number[];
   p?: number;
@@ -316,7 +318,8 @@ export async function encodeFile(file: File): Promise<{ images: EncodedImage[]; 
       chunkIndex,
       totalChunks,
       payloadLength: payload.length,
-      chunkCrc: crc32(payload)
+      chunkCrc: crc32(payload),
+      chunkBindingCrc: boundChunkCrc(chunkIndex, payload)
     };
     const canvas = encodeChunk(header, payload);
     images.push({
@@ -452,7 +455,8 @@ async function encodeVideoSegment({
         chunkIndex,
         totalChunks,
         payloadLength: payload.length,
-        chunkCrc: crc32(payload)
+        chunkCrc: crc32(payload),
+        chunkBindingCrc: boundChunkCrc(chunkIndex, payload)
       },
       payload
     });
@@ -478,6 +482,7 @@ async function encodeVideoSegment({
           totalChunks,
           payloadLength: parityPayload.length,
           chunkCrc: crc32(parityPayload),
+          chunkBindingCrc: boundChunkCrc(totalChunks + parityIndex, parityPayload),
           parityStartIndex,
           parityMemberCount: group.length,
           parityLastMemberLength: group.at(-1)?.length,
@@ -608,7 +613,8 @@ async function encodeHybridVideoSegment({
         chunkIndex: chunk.chunkIndex,
         totalChunks,
         payloadLength: payload.length,
-        chunkCrc: crc32(payload)
+        chunkCrc: crc32(payload),
+        chunkBindingCrc: boundChunkCrc(chunk.chunkIndex, payload)
       },
       payload
     });
@@ -634,6 +640,7 @@ async function encodeHybridVideoSegment({
           totalChunks,
           payloadLength: parityPayload.length,
           chunkCrc: crc32(parityPayload),
+          chunkBindingCrc: boundChunkCrc(totalChunks + parityIndex, parityPayload),
           parityStartIndex,
           parityMemberCount: group.length,
           parityLastMemberLength: group.at(-1)?.length,
@@ -1004,7 +1011,8 @@ export function encodeIndexPost(files: FileManifest[]): { canvas: HTMLCanvasElem
         chunkIndex: 0,
         totalChunks: 1,
         payloadLength: indexBytes.length,
-        chunkCrc: crc32(indexBytes)
+        chunkCrc: crc32(indexBytes),
+        chunkBindingCrc: boundChunkCrc(0, indexBytes)
       },
       indexBytes
     ),
@@ -1069,7 +1077,8 @@ function decodeChunkBytes(allBytes: Uint8Array): DecodeResult {
   const header = normalizeHeader(JSON.parse(headerJson) as Header | CompactHeader);
   const payloadStart = HEADER_BYTES;
   const payload = allBytes.slice(payloadStart, payloadStart + header.payloadLength);
-  const crcOk = crc32(payload) === header.chunkCrc;
+  const crcOk = crc32(payload) === header.chunkCrc
+    && (header.chunkBindingCrc === undefined || boundChunkCrc(header.chunkIndex, payload) === header.chunkBindingCrc);
   const parityMembers = expandParityMembers(header);
 
   return {
@@ -1126,7 +1135,7 @@ function majoritySymbols(groups: number[][]) {
   return symbols;
 }
 
-export async function reassemble(results: DecodeResult[]): Promise<{ blob: Blob; fileName: string; hashOk: boolean; hash: string }> {
+export async function reassemble(results: DecodeResult[]): Promise<{ blob: Blob; fileName: string; hashOk: boolean; hash: string; expectedHash: string }> {
   const chunks = recoverDataChunks(results);
   const totalSize = chunks[0]?.fileSize ?? 0;
   const out = new Uint8Array(totalSize);
@@ -1143,7 +1152,8 @@ export async function reassemble(results: DecodeResult[]): Promise<{ blob: Blob;
     blob: new Blob([out], { type: chunks[0]?.mimeType || "application/octet-stream" }),
     fileName: chunks[0]?.fileName || "download.bin",
     hashOk: !expectedHash || hash === expectedHash,
-    hash
+    hash,
+    expectedHash: expectedHash ?? ""
   };
 }
 
@@ -1977,6 +1987,7 @@ function compactHeader(header: Header): CompactHeader {
     t: header.totalChunks,
     l: header.payloadLength,
     c: header.chunkCrc,
+    d: header.chunkBindingCrc,
     a: header.parityMemberIndexes,
     b: header.parityMemberLengths,
     p: header.parityStartIndex,
@@ -1998,6 +2009,7 @@ function normalizeHeader(header: Header | CompactHeader): Header {
     totalChunks: header.t,
     payloadLength: header.l,
     chunkCrc: header.c,
+    chunkBindingCrc: header.d,
     parityMemberIndexes: header.a,
     parityMemberLengths: header.b,
     parityStartIndex: header.p,
@@ -2190,4 +2202,14 @@ function crc32(bytes: Uint8Array) {
     }
   }
   return ~crc >>> 0;
+}
+
+function boundChunkCrc(chunkIndex: number, payload: Uint8Array) {
+  const bytes = new Uint8Array(payload.length + 4);
+  bytes[0] = chunkIndex >>> 24;
+  bytes[1] = chunkIndex >>> 16;
+  bytes[2] = chunkIndex >>> 8;
+  bytes[3] = chunkIndex;
+  bytes.set(payload, 4);
+  return crc32(bytes);
 }

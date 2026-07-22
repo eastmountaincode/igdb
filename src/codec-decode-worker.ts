@@ -17,6 +17,7 @@ type Header = {
   totalChunks: number;
   payloadLength: number;
   chunkCrc: number;
+  chunkBindingCrc?: number;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
   parityStartIndex?: number;
@@ -36,6 +37,7 @@ type CompactHeader = {
   t: number;
   l: number;
   c: number;
+  d?: number;
   a?: number[];
   b?: number[];
   p?: number;
@@ -122,7 +124,8 @@ function decodeChunkBytes(profile: WorkerCodecProfile, allBytes: Uint8Array): De
   const header = normalizeHeader(JSON.parse(headerJson) as Header | CompactHeader);
   const payloadStart = profile.headerBytes;
   const payload = allBytes.slice(payloadStart, payloadStart + header.payloadLength);
-  const crcOk = crc32(payload) === header.chunkCrc;
+  const crcOk = crc32(payload) === header.chunkCrc
+    && (header.chunkBindingCrc === undefined || boundChunkCrc(header.chunkIndex, payload) === header.chunkBindingCrc);
   const payloadBuffer = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength) as ArrayBuffer;
   const parityMembers = expandParityMembers(profile, header);
 
@@ -155,6 +158,7 @@ function normalizeHeader(header: Header | CompactHeader): Header {
     totalChunks: header.t,
     payloadLength: header.l,
     chunkCrc: header.c,
+    chunkBindingCrc: header.d,
     parityMemberIndexes: header.a,
     parityMemberLengths: header.b,
     parityStartIndex: header.p,
@@ -286,4 +290,14 @@ function crc32(bytes: Uint8Array) {
     }
   }
   return ~crc >>> 0;
+}
+
+function boundChunkCrc(chunkIndex: number, payload: Uint8Array) {
+  const bytes = new Uint8Array(payload.length + 4);
+  bytes[0] = chunkIndex >>> 24;
+  bytes[1] = chunkIndex >>> 16;
+  bytes[2] = chunkIndex >>> 8;
+  bytes[3] = chunkIndex;
+  bytes.set(payload, 4);
+  return crc32(bytes);
 }
