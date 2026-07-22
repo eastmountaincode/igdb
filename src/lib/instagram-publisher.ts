@@ -515,7 +515,7 @@ async function normalizeDataVideo(
       "-b:v", "6M",
       "-maxrate", "6M",
       "-bufsize", "12M",
-      "-g", "1",
+      "-g", "30",
       "-r", "30",
       "-pix_fmt", "yuv420p",
       "-colorspace", "smpte170m",
