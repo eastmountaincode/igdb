@@ -1537,26 +1537,21 @@ function encodeChunk(header: Header, payload: Uint8Array): HTMLCanvasElement {
   return canvas;
 }
 
-function drawEncodedChunk(
-  ctx: CanvasRenderingContext2D,
-  header: Header,
-  payload: Uint8Array,
-  paletteShift = 0
-) {
+function drawEncodedChunk(ctx: CanvasRenderingContext2D, header: Header, payload: Uint8Array) {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
   drawFrame(ctx);
 
   const packed = packChunk(header, payload);
   const symbols = bytesToSymbols(packed);
-  drawSymbolGrid(ctx, symbols, paletteShift);
+  drawSymbolGrid(ctx, symbols);
 
-  drawCalibration(ctx, paletteShift);
+  drawCalibration(ctx);
 }
 
 let symbolGridCanvas: HTMLCanvasElement | null = null;
 
-function drawSymbolGrid(ctx: CanvasRenderingContext2D, symbols: number[], paletteShift = 0) {
+function drawSymbolGrid(ctx: CanvasRenderingContext2D, symbols: number[]) {
   if (!symbolGridCanvas) {
     symbolGridCanvas = document.createElement("canvas");
     symbolGridCanvas.width = GRID_CELLS;
@@ -1565,8 +1560,7 @@ function drawSymbolGrid(ctx: CanvasRenderingContext2D, symbols: number[], palett
   const gridContext = requiredContext(symbolGridCanvas);
   const image = gridContext.createImageData(GRID_CELLS, GRID_CELLS);
   for (let index = 0; index < symbols.length; index++) {
-    const paletteIndex = ((symbols[index] ?? 0) + paletteShift) % palette.length;
-    const [r, g, b] = palette[paletteIndex];
+    const [r, g, b] = palette[symbols[index] ?? 0];
     const pixel = index * 4;
     image.data[pixel] = r;
     image.data[pixel + 1] = g;
@@ -1680,7 +1674,7 @@ async function recordChunkJobsAsMp4(
     frameRate: fps
   });
   await output.start();
-  const frameDuration = 1 / fps;
+  const chunkDuration = repeatFrames / fps;
   const audioDurationSeconds = audioPayloads.reduce(
     (sum, payload) => sum + audioProbeDurationForByteLength(payload.length),
     0
@@ -1688,19 +1682,16 @@ async function recordChunkJobsAsMp4(
   const visualFrames = jobs.length * repeatFrames;
   const visualDurationSeconds = visualFrames / fps;
   const targetDurationSeconds = Math.max(visualDurationSeconds, audioDurationSeconds, INSTAGRAM_MIN_VIDEO_SECONDS);
-  const totalAdds = visualFrames + (targetDurationSeconds > visualDurationSeconds ? 1 : 0);
+  const totalAdds = jobs.length + (targetDurationSeconds > visualDurationSeconds ? 1 : 0);
   let completedAdds = 0;
   let currentTime = 0;
   onProgress?.({ phase: "Encoding MP4 chunks", completed: 0, total: totalAdds });
   for (const job of jobs) {
-    for (let repeatIndex = 0; repeatIndex < repeatFrames; repeatIndex++) {
-      const paletteShift = (repeatIndex * 2) % palette.length;
-      drawEncodedChunk(ctx, job.header, job.payload, paletteShift);
-      await source.add(currentTime, frameDuration, { keyFrame: repeatIndex === 0 });
-      currentTime += frameDuration;
-      completedAdds++;
-      onProgress?.({ phase: "Encoding MP4 chunks", completed: completedAdds, total: totalAdds });
-    }
+    drawEncodedChunk(ctx, job.header, job.payload);
+    await source.add(currentTime, chunkDuration, { keyFrame: true });
+    currentTime += chunkDuration;
+    completedAdds++;
+    onProgress?.({ phase: "Encoding MP4 chunks", completed: completedAdds, total: totalAdds });
     await yieldToBrowser();
   }
   if (targetDurationSeconds > currentTime) {
@@ -2101,9 +2092,9 @@ function drawFinder(ctx: CanvasRenderingContext2D, x: number, y: number) {
   ctx.fillRect(x + 14, y + 14, 14, 14);
 }
 
-function drawCalibration(ctx: CanvasRenderingContext2D, paletteShift = 0) {
+function drawCalibration(ctx: CanvasRenderingContext2D) {
   for (let i = 0; i < palette.length; i++) {
-    const [r, g, b] = palette[(i + paletteShift) % palette.length];
+    const [r, g, b] = palette[i];
     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
     ctx.fillRect(242 + i * 48, 15, 24, 24);
   }
