@@ -1,9 +1,10 @@
 export {};
 
 const MAGIC = [70, 84, 73, 71];
-const VERSION = 1;
+const VERSION = 2;
 const SYMBOL_BLOCK_BYTES = 8;
 const SYMBOL_BLOCK_SIZE = 25;
+const SPATIAL_SYMBOL_COPIES = 3;
 
 type ChunkKind = "data" | "xor" | "rs";
 
@@ -107,15 +108,38 @@ function decodeImageData(profile: WorkerCodecProfile, imageData: Uint8ClampedArr
     }
   }
 
+  const spatialSymbolCount = Math.floor(profile.symbolCount / SPATIAL_SYMBOL_COPIES);
+  const legacyRawChunkBytes = Math.floor(profile.symbolCount / SYMBOL_BLOCK_SIZE) * SYMBOL_BLOCK_BYTES;
   try {
-    return decodeChunkBytes(profile, bitsToBytes(profile, symbols));
+    return decodeChunkBytes(profile, bitsToBytes(profile, spatialMajoritySymbols(profile, symbols), profile.rawChunkBytes));
   } catch {
-    return decodeChunkBytes(profile, legacyBitsToBytes(profile, symbols));
+    try {
+      return decodeChunkBytes(profile, bitsToBytes(profile, symbols, legacyRawChunkBytes));
+    } catch {
+      return decodeChunkBytes(profile, legacyBitsToBytes(profile, symbols));
+    }
   }
 }
 
+function spatialMajoritySymbols(profile: WorkerCodecProfile, symbols: number[]) {
+  const spatialSymbolCount = Math.floor(profile.symbolCount / SPATIAL_SYMBOL_COPIES);
+  const logical = new Array<number>(spatialSymbolCount).fill(0);
+  for (let index = 0; index < spatialSymbolCount; index++) {
+    const counts = new Array<number>(profile.symbolRadix).fill(0);
+    counts[symbols[index] ?? 0]++;
+    counts[symbols[index + spatialSymbolCount] ?? 0]++;
+    counts[symbols[index + spatialSymbolCount * 2] ?? 0]++;
+    let best = 0;
+    for (let symbol = 1; symbol < counts.length; symbol++) {
+      if (counts[symbol] > counts[best]) best = symbol;
+    }
+    logical[index] = best;
+  }
+  return logical;
+}
+
 function decodeChunkBytes(profile: WorkerCodecProfile, allBytes: Uint8Array): DecodeResult {
-  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || allBytes[4] !== VERSION) {
+  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || (allBytes[4] !== 1 && allBytes[4] !== VERSION)) {
     throw new Error("Unknown video payload format.");
   }
   const headerLength = readUint16(allBytes, 5);
@@ -180,10 +204,10 @@ function expandParityMembers(profile: WorkerCodecProfile, header: Header) {
   return { indexes, lengths };
 }
 
-function bitsToBytes(profile: WorkerCodecProfile, symbols: number[]) {
+function bitsToBytes(profile: WorkerCodecProfile, symbols: number[], byteLength = profile.rawChunkBytes) {
   const radix = BigInt(profile.symbolRadix);
-  const bytes = new Uint8Array(profile.rawChunkBytes);
-  const blockCount = Math.floor(symbols.length / SYMBOL_BLOCK_SIZE);
+  const bytes = new Uint8Array(byteLength);
+  const blockCount = Math.min(Math.floor(symbols.length / SYMBOL_BLOCK_SIZE), Math.ceil(byteLength / SYMBOL_BLOCK_BYTES));
   for (let block = 0; block < blockCount; block++) {
     let value = 0n;
     const symbolStart = block * SYMBOL_BLOCK_SIZE;
@@ -192,7 +216,7 @@ function bitsToBytes(profile: WorkerCodecProfile, symbols: number[]) {
     }
     const byteStart = block * SYMBOL_BLOCK_BYTES;
     for (let offset = SYMBOL_BLOCK_BYTES - 1; offset >= 0; offset--) {
-      bytes[byteStart + offset] = Number(value & 255n);
+      if (byteStart + offset < bytes.length) bytes[byteStart + offset] = Number(value & 255n);
       value >>= 8n;
     }
   }
