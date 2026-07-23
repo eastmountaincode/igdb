@@ -1,10 +1,12 @@
 export {};
 
 const MAGIC = [70, 84, 73, 71];
-const VERSION = 2;
+const VERSION = 3;
 const SYMBOL_BLOCK_BYTES = 8;
 const SYMBOL_BLOCK_SIZE = 25;
 const SPATIAL_SYMBOL_COPIES = 3;
+const HAMMING_DATA_SYMBOLS = 4;
+const HAMMING_CODE_SYMBOLS = 7;
 
 type ChunkKind = "data" | "xor" | "rs";
 
@@ -109,16 +111,52 @@ function decodeImageData(profile: WorkerCodecProfile, imageData: Uint8ClampedArr
   }
 
   const spatialSymbolCount = Math.floor(profile.symbolCount / SPATIAL_SYMBOL_COPIES);
+  const spatialRawChunkBytes = Math.floor(spatialSymbolCount / SYMBOL_BLOCK_SIZE) * SYMBOL_BLOCK_BYTES;
   const legacyRawChunkBytes = Math.floor(profile.symbolCount / SYMBOL_BLOCK_SIZE) * SYMBOL_BLOCK_BYTES;
   try {
-    return decodeChunkBytes(profile, bitsToBytes(profile, spatialMajoritySymbols(profile, symbols), profile.rawChunkBytes));
+    return decodeChunkBytes(profile, hammingDecodeSymbols(profile, symbols));
   } catch {
     try {
-      return decodeChunkBytes(profile, bitsToBytes(profile, symbols, legacyRawChunkBytes));
+      return decodeChunkBytes(profile, bitsToBytes(profile, spatialMajoritySymbols(profile, symbols), spatialRawChunkBytes));
     } catch {
-      return decodeChunkBytes(profile, legacyBitsToBytes(profile, symbols));
+      try {
+        return decodeChunkBytes(profile, bitsToBytes(profile, symbols, legacyRawChunkBytes));
+      } catch {
+        return decodeChunkBytes(profile, legacyBitsToBytes(profile, symbols));
+      }
     }
   }
+}
+
+function hammingDecodeSymbols(profile: WorkerCodecProfile, symbols: number[]) {
+  const sourceSymbolCount = Math.floor(profile.symbolCount / HAMMING_CODE_SYMBOLS) * HAMMING_DATA_SYMBOLS;
+  const dataSymbols: number[] = [];
+  const groupCount = Math.floor(sourceSymbolCount / HAMMING_DATA_SYMBOLS);
+  for (let group = 0; group < groupCount; group++) {
+    const code = symbols.slice(group * HAMMING_CODE_SYMBOLS, group * HAMMING_CODE_SYMBOLS + HAMMING_CODE_SYMBOLS);
+    const data = [0, 0, 0, 0];
+    for (let bit = 0; bit < 2; bit++) {
+      const plane = code.map((symbol) => (symbol >> bit) & 1);
+      const syndrome =
+        (plane[0] ^ plane[2] ^ plane[4] ^ plane[6]) |
+        ((plane[1] ^ plane[2] ^ plane[5] ^ plane[6]) << 1) |
+        ((plane[3] ^ plane[4] ^ plane[5] ^ plane[6]) << 2);
+      if (syndrome > 0 && syndrome <= HAMMING_CODE_SYMBOLS) plane[syndrome - 1] ^= 1;
+      const decoded = [plane[2], plane[4], plane[5], plane[6]];
+      for (let index = 0; index < data.length; index++) data[index] |= decoded[index] << bit;
+    }
+    dataSymbols.push(...data);
+  }
+  const bytes = new Uint8Array(profile.rawChunkBytes);
+  for (let index = 0; index < bytes.length; index++) {
+    const offset = index * 4;
+    bytes[index] =
+      ((dataSymbols[offset] ?? 0) << 6) |
+      ((dataSymbols[offset + 1] ?? 0) << 4) |
+      ((dataSymbols[offset + 2] ?? 0) << 2) |
+      (dataSymbols[offset + 3] ?? 0);
+  }
+  return bytes;
 }
 
 function spatialMajoritySymbols(profile: WorkerCodecProfile, symbols: number[]) {
@@ -139,7 +177,7 @@ function spatialMajoritySymbols(profile: WorkerCodecProfile, symbols: number[]) 
 }
 
 function decodeChunkBytes(profile: WorkerCodecProfile, allBytes: Uint8Array): DecodeResult {
-  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || (allBytes[4] !== 1 && allBytes[4] !== VERSION)) {
+  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || ![1, 2, VERSION].includes(allBytes[4])) {
     throw new Error("Unknown video payload format.");
   }
   const headerLength = readUint16(allBytes, 5);
