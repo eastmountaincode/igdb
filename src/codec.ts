@@ -5,6 +5,7 @@ import {
   audioProbeDurationForByteLength,
   decodeDtmfProbeBytePacketsFromFile
 } from "./audio-codec";
+import type { CodecFormatId } from "./codec-registry";
 
 export const CANVAS_SIZE = 720;
 export const CELL_SIZE = 4;
@@ -69,6 +70,8 @@ export type DecodeResult = {
   totalChunks: number;
   payload: Uint8Array;
   message: string;
+  codecId: CodecFormatId;
+  payloadVersion: number;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
   parityRow?: number;
@@ -833,7 +836,9 @@ async function decodeHybridVideoFile(
         chunkIndex: audioStartChunkIndex + index,
         totalChunks: template.totalChunks,
         payload: audio.bytes,
-        message: `decoded from audio side channel packet ${index + 1}/${audioChunkCount} (${Math.round(audio.confidence * 100)}% sync)`
+        message: `decoded from audio side channel packet ${index + 1}/${audioChunkCount} (${Math.round(audio.confidence * 100)}% sync)`,
+        codecId: template.codecId,
+        payloadVersion: template.payloadVersion
       }];
     });
     return recoverDataChunks([...visualChunks, ...audioChunks]);
@@ -1066,24 +1071,44 @@ function readSymbolsFromImageData(imageData: Uint8ClampedArray) {
   return symbols;
 }
 
+const SYMBOL_DECODERS: Array<{
+  id: CodecFormatId;
+  payloadVersions: readonly number[];
+  decode: (symbols: number[]) => Uint8Array;
+}> = [
+  { id: "hamming74-v3", payloadVersions: [3], decode: hammingDecodeSymbols },
+  {
+    id: "spatial-majority-v2",
+    payloadVersions: [2],
+    decode: (symbols) => bitsToBytes(spatialMajoritySymbols(symbols), SPATIAL_RAW_CHUNK_BYTES)
+  },
+  {
+    id: "colorgrid6-block-v1-v2",
+    payloadVersions: [1, 2],
+    decode: (symbols) => bitsToBytes(symbols, LEGACY_RAW_CHUNK_BYTES)
+  },
+  { id: "colorgrid6-bigint-v1", payloadVersions: [1], decode: legacyBitsToBytes }
+];
+
 function decodeSymbols(symbols: number[]): DecodeResult {
-  try {
-    return decodeChunkBytes(hammingDecodeSymbols(symbols));
-  } catch {
+  let lastError: unknown;
+  for (const codec of SYMBOL_DECODERS) {
     try {
-      return decodeChunkBytes(bitsToBytes(spatialMajoritySymbols(symbols), SPATIAL_RAW_CHUNK_BYTES));
-    } catch {
-      try {
-        return decodeChunkBytes(bitsToBytes(symbols, LEGACY_RAW_CHUNK_BYTES));
-      } catch {
-        return decodeChunkBytes(legacyBitsToBytes(symbols));
-      }
+      return decodeChunkBytes(codec.decode(symbols), codec.id, codec.payloadVersions);
+    } catch (error) {
+      lastError = error;
     }
   }
+  throw lastError instanceof Error ? lastError : new Error("Unknown video payload format.");
 }
 
-function decodeChunkBytes(allBytes: Uint8Array): DecodeResult {
-  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || ![1, 2, VERSION].includes(allBytes[4])) {
+function decodeChunkBytes(
+  allBytes: Uint8Array,
+  codecId: CodecFormatId,
+  acceptedPayloadVersions: readonly number[]
+): DecodeResult {
+  const payloadVersion = allBytes[4];
+  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || !acceptedPayloadVersions.includes(payloadVersion)) {
     throw new Error("Unknown video payload format.");
   }
   const headerLength = readUint16(allBytes, 5);
@@ -1107,6 +1132,8 @@ function decodeChunkBytes(allBytes: Uint8Array): DecodeResult {
     totalChunks: header.totalChunks,
     payload,
     message: crcOk ? "decoded" : "decoded with checksum mismatch",
+    codecId,
+    payloadVersion,
     parityMemberIndexes: parityMembers.indexes,
     parityMemberLengths: parityMembers.lengths,
     parityRow: header.parityRow

@@ -136,6 +136,7 @@ export function InstagramPixelDbApp() {
   const expectedChunks = decodedChunks[0]?.totalChunks ?? 0;
   const canAssemble = expectedChunks > 0 && recoveredChunks === expectedChunks;
   const recoveredFileName = decodedChunks.find((chunk) => chunk.kind === "data" && chunk.fileName)?.fileName;
+  const recoveredCodec = decodedChunks.find((chunk) => chunk.ok && chunk.kind === "data")?.codecId;
   const decodeLog = buildDecodeSummary(decodedChunks, decodeMessages);
   function resetDecode() {
     setDecodedChunks([]);
@@ -739,6 +740,10 @@ export function InstagramPixelDbApp() {
                 <dt>file</dt>
                 <dd>{recoveredFileName ?? "—"}</dd>
               </div>
+              <div>
+                <dt>codec</dt>
+                <dd>{recoveredCodec ?? "—"}</dd>
+              </div>
             </dl>
 
             <div className="button-row">
@@ -1077,6 +1082,7 @@ function buildDecodeSummary(chunks: DecodeResult[], messages: string[]) {
   const dataChunks = chunks.filter((chunk) => chunk.ok && chunk.kind === "data").sort((left, right) => left.chunkIndex - right.chunkIndex);
   const totalChunks = dataChunks[0]?.totalChunks ?? 0;
   const fileName = dataChunks.find((chunk) => chunk.fileName)?.fileName ?? "unknown file";
+  const codec = dataChunks[0] ? `${dataChunks[0].codecId} (payload v${dataChunks[0].payloadVersion})` : "unknown";
   const recoveredIndexes = new Set(dataChunks.map((chunk) => chunk.chunkIndex));
   const missingIndexes =
     totalChunks > 0
@@ -1085,6 +1091,7 @@ function buildDecodeSummary(chunks: DecodeResult[], messages: string[]) {
 
   return [
     `Recovered ${dataChunks.length}/${totalChunks || "?"} data chunks for ${fileName}.`,
+    `Codec: ${codec}.`,
     missingIndexes.length ? `Missing ${missingIndexes.length}: ${formatIndexRanges(missingIndexes, 12)}.` : "All data chunks recovered.",
     ...messages
   ]

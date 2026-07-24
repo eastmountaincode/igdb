@@ -1,7 +1,8 @@
 export {};
 
+import type { CodecFormatId } from "./codec-registry";
+
 const MAGIC = [70, 84, 73, 71];
-const VERSION = 3;
 const SYMBOL_BLOCK_BYTES = 8;
 const SYMBOL_BLOCK_SIZE = 25;
 const SPATIAL_SYMBOL_COPIES = 3;
@@ -78,6 +79,8 @@ type DecodeResult = {
   totalChunks: number;
   payload: ArrayBuffer;
   message: string;
+  codecId: CodecFormatId;
+  payloadVersion: number;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
   parityRow?: number;
@@ -113,19 +116,33 @@ function decodeImageData(profile: WorkerCodecProfile, imageData: Uint8ClampedArr
   const spatialSymbolCount = Math.floor(profile.symbolCount / SPATIAL_SYMBOL_COPIES);
   const spatialRawChunkBytes = Math.floor(spatialSymbolCount / SYMBOL_BLOCK_SIZE) * SYMBOL_BLOCK_BYTES;
   const legacyRawChunkBytes = Math.floor(profile.symbolCount / SYMBOL_BLOCK_SIZE) * SYMBOL_BLOCK_BYTES;
-  try {
-    return decodeChunkBytes(profile, hammingDecodeSymbols(profile, symbols));
-  } catch {
+  const decoders: Array<{
+    id: CodecFormatId;
+    payloadVersions: readonly number[];
+    decode: () => Uint8Array;
+  }> = [
+    { id: "hamming74-v3", payloadVersions: [3], decode: () => hammingDecodeSymbols(profile, symbols) },
+    {
+      id: "spatial-majority-v2",
+      payloadVersions: [2],
+      decode: () => bitsToBytes(profile, spatialMajoritySymbols(profile, symbols), spatialRawChunkBytes)
+    },
+    {
+      id: "colorgrid6-block-v1-v2",
+      payloadVersions: [1, 2],
+      decode: () => bitsToBytes(profile, symbols, legacyRawChunkBytes)
+    },
+    { id: "colorgrid6-bigint-v1", payloadVersions: [1], decode: () => legacyBitsToBytes(profile, symbols) }
+  ];
+  let lastError: unknown;
+  for (const codec of decoders) {
     try {
-      return decodeChunkBytes(profile, bitsToBytes(profile, spatialMajoritySymbols(profile, symbols), spatialRawChunkBytes));
-    } catch {
-      try {
-        return decodeChunkBytes(profile, bitsToBytes(profile, symbols, legacyRawChunkBytes));
-      } catch {
-        return decodeChunkBytes(profile, legacyBitsToBytes(profile, symbols));
-      }
+      return decodeChunkBytes(profile, codec.decode(), codec.id, codec.payloadVersions);
+    } catch (error) {
+      lastError = error;
     }
   }
+  throw lastError instanceof Error ? lastError : new Error("Unknown video payload format.");
 }
 
 function hammingDecodeSymbols(profile: WorkerCodecProfile, symbols: number[]) {
@@ -176,8 +193,14 @@ function spatialMajoritySymbols(profile: WorkerCodecProfile, symbols: number[]) 
   return logical;
 }
 
-function decodeChunkBytes(profile: WorkerCodecProfile, allBytes: Uint8Array): DecodeResult {
-  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || ![1, 2, VERSION].includes(allBytes[4])) {
+function decodeChunkBytes(
+  profile: WorkerCodecProfile,
+  allBytes: Uint8Array,
+  codecId: CodecFormatId,
+  acceptedPayloadVersions: readonly number[]
+): DecodeResult {
+  const payloadVersion = allBytes[4];
+  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || !acceptedPayloadVersions.includes(payloadVersion)) {
     throw new Error("Unknown video payload format.");
   }
   const headerLength = readUint16(allBytes, 5);
@@ -202,6 +225,8 @@ function decodeChunkBytes(profile: WorkerCodecProfile, allBytes: Uint8Array): De
     totalChunks: header.totalChunks,
     payload: payloadBuffer,
     message: crcOk ? "decoded" : "decoded with checksum mismatch",
+    codecId,
+    payloadVersion,
     parityMemberIndexes: parityMembers.indexes,
     parityMemberLengths: parityMembers.lengths,
     parityRow: header.parityRow
