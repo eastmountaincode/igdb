@@ -11,6 +11,12 @@ CAPABILITIES_JSON=$(curl -fsS "$SITE/api/codec-capabilities")
 DECODER_REVISION=$(jq -er '.decoderRevision' <<<"$CAPABILITIES_JSON")
 SUPPORTED_CODECS=$(jq -ec '[.formats[].id]' <<<"$CAPABILITIES_JSON")
 TARGET_MEDIA_ID=${ARCHIVE_MEDIA_ID:-}
+LOCK_FILE="$ROOT/.recovery.lock"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  printf 'SKIPPED\tarchive recovery already running\n'
+  exit 0
+fi
 
 cleanup() {
   agent-browser --session "$SESSION" close >/dev/null 2>&1 || true
@@ -28,12 +34,12 @@ record_error() {
     return
   fi
   at=$(date -u +%FT%TZ)
-  if grep -Eqi 'network|download|timed out|timeout|could not resolve|No post from|still processing' <<<"$message"; then
-    error_field="transientError"
-    status_label="RETRY"
-  else
+  if grep -Eqi 'sha-256 verification failed|hash mismatch|missing chunks|could not recover|required chunks|unrecoverable|corrupt|unsupported codec|no supported codec' <<<"$message"; then
     error_field="decodeError"
     status_label="CORRUPT"
+  else
+    error_field="transientError"
+    status_label="RETRY"
   fi
   temporary=$(mktemp)
   jq --arg field "$error_field" --arg message "$message" --arg at "$at" --arg revision "$DECODER_REVISION" --arg codec "$codec_id" --argjson supported "$SUPPORTED_CODECS" \
@@ -54,7 +60,7 @@ while IFS=$'\t' read -r media_id permalink relative_directory; do
   agent-browser --session "$SESSION" wait 1000 >/dev/null 2>&1 || true
   agent-browser --session "$SESSION" find role button click --name "read URL" >/dev/null 2>&1 || continue
   body=""
-  for _ in $(seq 1 180); do
+  for _ in $(seq 1 720); do
     body=$(agent-browser --session "$SESSION" get text body 2>/dev/null || true)
     if grep -Eq "SHA-256 OK. Ready to download.|Video decode failed:" <<<"$body"; then
       break
