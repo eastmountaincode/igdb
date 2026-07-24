@@ -10,6 +10,7 @@ export AGENT_BROWSER_DEFAULT_TIMEOUT=900000
 CAPABILITIES_JSON=$(curl -fsS "$SITE/api/codec-capabilities")
 DECODER_REVISION=$(jq -er '.decoderRevision' <<<"$CAPABILITIES_JSON")
 SUPPORTED_CODECS=$(jq -ec '[.formats[].id]' <<<"$CAPABILITIES_JSON")
+TARGET_MEDIA_ID=${ARCHIVE_MEDIA_ID:-}
 
 cleanup() {
   agent-browser --session "$SESSION" close >/dev/null 2>&1 || true
@@ -43,7 +44,7 @@ record_error() {
   printf '%s\t%s\t%s\n' "$status_label" "$media_id" "$message"
 }
 
-jq -r --arg revision "$DECODER_REVISION" '.posts | to_entries[] | select(.value.removedAt == null and .value.recoveredFile == null and (.value.decodeError == null or .value.decodeError.decoderRevision != $revision)) | [.key, .value.permalink, .value.directory] | @tsv' "$MANIFEST" |
+jq -r --arg revision "$DECODER_REVISION" --arg target "$TARGET_MEDIA_ID" '.posts | to_entries[] | select(($target == "" or .key == $target) and .value.removedAt == null and .value.recoveredFile == null and (.value.decodeError == null or .value.decodeError.decoderRevision != $revision)) | [.key, .value.permalink, .value.directory] | @tsv' "$MANIFEST" |
 while IFS=$'\t' read -r media_id permalink relative_directory; do
   directory="$ROOT/$relative_directory"
   post_json="$directory/post.json"

@@ -18,6 +18,7 @@ if (!token) throw new Error("INSTAGRAM_ACCESS_TOKEN_NORMAL_SHOPKEEP is not confi
 
 const decoderCapabilities = await loadDecoderCapabilities();
 const decoderRevision = decoderCapabilities.decoderRevision;
+const targetMediaId = process.env.ARCHIVE_MEDIA_ID?.trim() ?? "";
 
 await mkdir(POSTS, { recursive: true });
 const localIndex = JSON.parse(await readFile(INDEX, "utf8"));
@@ -30,6 +31,7 @@ let unchanged = 0;
 let failed = 0;
 
 for (const item of media) {
+  if (targetMediaId && item.id !== targetMediaId) continue;
   const shortcode = new URL(item.permalink).pathname.split("/").filter(Boolean).at(-1);
   const directory = join(POSTS, `${item.timestamp.slice(0, 10)}_${shortcode}`);
   await mkdir(directory, { recursive: true });
@@ -54,7 +56,8 @@ for (const item of media) {
       const extension = child.media_type === "VIDEO" ? ".mp4" : ".jpg";
       const label = isCover ? "cover" : child.media_type === "VIDEO" ? `data-${String(index - (hasCover ? 0 : -1)).padStart(2, "0")}` : `image-${String(index + 1).padStart(2, "0")}`;
       const path = join(directory, `${label}${extension}`);
-      const result = await download(source, path);
+      const previousFile = existingRecord.files?.find((file) => file.name === basename(path));
+      const result = await download(source, path, Boolean(previousFile && previousFile.mediaId !== child.id));
       result.changed ? downloaded++ : unchanged++;
       files.push({ name: basename(path), mediaId: child.id, mediaType: child.media_type, bytes: result.bytes, sha256: result.sha256 });
     }
@@ -142,11 +145,13 @@ function graphUrl(path, params) {
   return url.toString();
 }
 
-async function download(url, path) {
-  try {
-    const existing = await stat(path);
-    if (existing.size > 0) return { changed: false, bytes: existing.size, sha256: await hashFile(path) };
-  } catch {}
+async function download(url, path, force = false) {
+  if (!force) {
+    try {
+      const existing = await stat(path);
+      if (existing.size > 0) return { changed: false, bytes: existing.size, sha256: await hashFile(path) };
+    } catch {}
+  }
   const response = await fetch(url, { redirect: "follow" });
   if (!response.ok || !response.body) throw new Error(`Download failed (${response.status})`);
   const temporary = `${path}.${process.pid}.tmp`;
