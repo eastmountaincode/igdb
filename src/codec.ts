@@ -6,6 +6,7 @@ import {
   decodeDtmfProbeBytePacketsFromFile
 } from "./audio-codec";
 import type { CodecFormatId } from "./codec-registry";
+import { sha256Hex } from "./sha256";
 
 export const CANVAS_SIZE = 720;
 export const CELL_SIZE = 4;
@@ -2251,11 +2252,6 @@ function readUint16(bytes: Uint8Array, offset: number) {
   return (bytes[offset] << 8) | bytes[offset + 1];
 }
 
-async function sha256Hex(bytes: Uint8Array) {
-  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 
 function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number) {
   return new Promise<Blob>((resolve, reject) => {
