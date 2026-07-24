@@ -23,11 +23,18 @@ const SYMBOL_COUNT = GRID_CELLS * GRID_CELLS;
 const SYMBOL_RADIX = palette.length;
 const SYMBOL_BLOCK_BYTES = 8;
 const SYMBOL_BLOCK_SIZE = 25;
+const SPATIAL_SYMBOL_COPIES = 3;
+const SPATIAL_SYMBOL_COUNT = Math.floor(SYMBOL_COUNT / SPATIAL_SYMBOL_COPIES);
+const SPATIAL_RAW_CHUNK_BYTES = Math.floor(SPATIAL_SYMBOL_COUNT / SYMBOL_BLOCK_SIZE) * SYMBOL_BLOCK_BYTES;
+const LEGACY_RAW_CHUNK_BYTES = Math.floor(SYMBOL_COUNT / SYMBOL_BLOCK_SIZE) * SYMBOL_BLOCK_BYTES;
+const HAMMING_DATA_SYMBOLS = 4;
+const HAMMING_CODE_SYMBOLS = 7;
+const HAMMING_SOURCE_SYMBOL_COUNT = Math.floor(SYMBOL_COUNT / HAMMING_CODE_SYMBOLS) * HAMMING_DATA_SYMBOLS;
 export const HEADER_BYTES = 512;
-export const RAW_CHUNK_BYTES = Math.floor(SYMBOL_COUNT / SYMBOL_BLOCK_SIZE) * SYMBOL_BLOCK_BYTES;
+export const RAW_CHUNK_BYTES = Math.floor(HAMMING_SOURCE_SYMBOL_COUNT / 4);
 export const PAYLOAD_BYTES_PER_IMAGE = RAW_CHUNK_BYTES - HEADER_BYTES;
 export const VIDEO_FPS = 30;
-export const VIDEO_REPEAT_FRAMES = 3;
+export const VIDEO_REPEAT_FRAMES = 2;
 const INSTAGRAM_MIN_VIDEO_SECONDS = 3;
 export const VIDEO_PARITY_GROUP_SIZE = 64;
 export const VIDEO_PARITY_FRAMES_PER_GROUP = 12;
@@ -220,7 +227,7 @@ type SerializedDecodeResult = Omit<DecodeResult, "payload"> & {
 };
 
 const MAGIC = [70, 84, 73, 71]; // FTIG
-const VERSION = 1;
+const VERSION = 3;
 const ENCODE_WORKER_COUNT = 2;
 const SEGMENT_ENCODE_CONCURRENCY = 2;
 const DECODE_WORKER_COUNT = 2;
@@ -925,7 +932,7 @@ async function decodeVideoFileSingleFrame(
 
 export async function decodeVideoFileTemporalVote(
   file: File,
-  repeatFrames = VIDEO_REPEAT_FRAMES,
+  repeatFrames = 3,
   onProgress?: (progress: DecodeVideoProgress) => void
 ): Promise<DecodeResult[]> {
   onProgress?.({ phase: "Loading video", completed: 0, total: 1 });
@@ -1061,14 +1068,22 @@ function readSymbolsFromImageData(imageData: Uint8ClampedArray) {
 
 function decodeSymbols(symbols: number[]): DecodeResult {
   try {
-    return decodeChunkBytes(bitsToBytes(symbols));
+    return decodeChunkBytes(hammingDecodeSymbols(symbols));
   } catch {
-    return decodeChunkBytes(legacyBitsToBytes(symbols));
+    try {
+      return decodeChunkBytes(bitsToBytes(spatialMajoritySymbols(symbols), SPATIAL_RAW_CHUNK_BYTES));
+    } catch {
+      try {
+        return decodeChunkBytes(bitsToBytes(symbols, LEGACY_RAW_CHUNK_BYTES));
+      } catch {
+        return decodeChunkBytes(legacyBitsToBytes(symbols));
+      }
+    }
   }
 }
 
 function decodeChunkBytes(allBytes: Uint8Array): DecodeResult {
-  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || allBytes[4] !== VERSION) {
+  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || ![1, 2, VERSION].includes(allBytes[4])) {
     throw new Error("Unknown video payload format.");
   }
   const headerLength = readUint16(allBytes, 5);
@@ -1079,7 +1094,7 @@ function decodeChunkBytes(allBytes: Uint8Array): DecodeResult {
   const payload = allBytes.slice(payloadStart, payloadStart + header.payloadLength);
   const crcOk = crc32(payload) === header.chunkCrc
     && (header.chunkBindingCrc === undefined || boundChunkCrc(header.chunkIndex, payload) === header.chunkBindingCrc);
-  const parityMembers = expandParityMembers(header);
+  const parityMembers = expandParityMembers(header, allBytes.length - HEADER_BYTES);
 
   return {
     ok: crcOk,
@@ -1098,14 +1113,14 @@ function decodeChunkBytes(allBytes: Uint8Array): DecodeResult {
   };
 }
 
-function expandParityMembers(header: Header) {
+function expandParityMembers(header: Header, payloadCapacity: number) {
   if (header.parityMemberIndexes?.length) {
     return { indexes: header.parityMemberIndexes, lengths: header.parityMemberLengths ?? [] };
   }
   const count = header.parityMemberCount ?? 0;
   const start = header.parityStartIndex ?? 0;
   const indexes = Array.from({ length: count }, (_, index) => start + index);
-  const lengths = new Array<number>(count).fill(PAYLOAD_BYTES_PER_IMAGE);
+  const lengths = new Array<number>(count).fill(payloadCapacity);
   if (count && header.parityLastMemberLength !== undefined) lengths[count - 1] = header.parityLastMemberLength;
   return { indexes, lengths };
 }
@@ -1183,7 +1198,7 @@ export function recoverDataChunks(results: DecodeResult[]) {
       }
 
       const memberOffset = indexes.indexOf(missingIndex);
-      const payload = restored.slice(0, lengths[memberOffset] ?? PAYLOAD_BYTES_PER_IMAGE);
+      const payload = restored.slice(0, lengths[memberOffset] ?? restored.length);
       dataByIndex.set(missingIndex, {
         ...parity,
         kind: "data",
@@ -1299,8 +1314,9 @@ function recoverReedSolomonGroup(parityFrames: DecodeResult[], dataByIndex: Map<
   const inverse = invertGaloisMatrix(matrix);
   if (!inverse) return;
 
-  const recovered = missingIndexes.map(() => new Uint8Array(PAYLOAD_BYTES_PER_IMAGE));
-  for (let byteIndex = 0; byteIndex < PAYLOAD_BYTES_PER_IMAGE; byteIndex++) {
+  const parityPayloadBytes = Math.max(...selectedFrames.map((frame) => frame.payload.length));
+  const recovered = missingIndexes.map(() => new Uint8Array(parityPayloadBytes));
+  for (let byteIndex = 0; byteIndex < parityPayloadBytes; byteIndex++) {
     const rightSide = selectedFrames.map((frame) => {
       let value = frame.payload[byteIndex] ?? 0;
       for (let member = 0; member < indexes.length; member++) {
@@ -1325,7 +1341,7 @@ function recoverReedSolomonGroup(parityFrames: DecodeResult[], dataByIndex: Map<
       ...reference,
       kind: "data",
       chunkIndex: missingIndexes[missing],
-      payload: recovered[missing].slice(0, lengths[member] ?? PAYLOAD_BYTES_PER_IMAGE),
+      payload: recovered[missing].slice(0, lengths[member] ?? recovered[missing].length),
       message: "recovered from Reed-Solomon parity",
       parityMemberIndexes: undefined,
       parityMemberLengths: undefined,
@@ -1543,7 +1559,7 @@ function drawEncodedChunk(ctx: CanvasRenderingContext2D, header: Header, payload
   drawFrame(ctx);
 
   const packed = packChunk(header, payload);
-  const symbols = bytesToSymbols(packed);
+  const symbols = hammingEncodeBytes(packed);
   drawSymbolGrid(ctx, symbols);
 
   drawCalibration(ctx);
@@ -2020,7 +2036,7 @@ function normalizeHeader(header: Header | CompactHeader): Header {
 }
 
 function bytesToSymbols(bytes: Uint8Array) {
-  const symbols = new Array<number>(SYMBOL_COUNT).fill(0);
+  const symbols = new Array<number>(Math.ceil(bytes.length / SYMBOL_BLOCK_BYTES) * SYMBOL_BLOCK_SIZE).fill(0);
   const radix = BigInt(SYMBOL_RADIX);
   const blockCount = Math.ceil(bytes.length / SYMBOL_BLOCK_BYTES);
   for (let block = 0; block < blockCount; block++) {
@@ -2038,10 +2054,37 @@ function bytesToSymbols(bytes: Uint8Array) {
   return symbols;
 }
 
-function bitsToBytes(symbols: number[]) {
+function spatiallyRepeatSymbols(symbols: number[]) {
+  const physical = new Array<number>(SYMBOL_COUNT).fill(0);
+  for (let index = 0; index < SPATIAL_SYMBOL_COUNT; index++) {
+    const symbol = symbols[index] ?? 0;
+    physical[index] = symbol;
+    physical[index + SPATIAL_SYMBOL_COUNT] = symbol;
+    physical[index + SPATIAL_SYMBOL_COUNT * 2] = symbol;
+  }
+  return physical;
+}
+
+function spatialMajoritySymbols(symbols: number[]) {
+  const logical = new Array<number>(SPATIAL_SYMBOL_COUNT).fill(0);
+  for (let index = 0; index < SPATIAL_SYMBOL_COUNT; index++) {
+    const counts = new Array<number>(SYMBOL_RADIX).fill(0);
+    counts[symbols[index] ?? 0]++;
+    counts[symbols[index + SPATIAL_SYMBOL_COUNT] ?? 0]++;
+    counts[symbols[index + SPATIAL_SYMBOL_COUNT * 2] ?? 0]++;
+    let best = 0;
+    for (let symbol = 1; symbol < counts.length; symbol++) {
+      if (counts[symbol] > counts[best]) best = symbol;
+    }
+    logical[index] = best;
+  }
+  return logical;
+}
+
+function bitsToBytes(symbols: number[], byteLength = RAW_CHUNK_BYTES) {
   const radix = BigInt(SYMBOL_RADIX);
-  const bytes = new Uint8Array(RAW_CHUNK_BYTES);
-  const blockCount = Math.floor(symbols.length / SYMBOL_BLOCK_SIZE);
+  const bytes = new Uint8Array(byteLength);
+  const blockCount = Math.min(Math.floor(symbols.length / SYMBOL_BLOCK_SIZE), Math.ceil(byteLength / SYMBOL_BLOCK_BYTES));
   for (let block = 0; block < blockCount; block++) {
     let value = 0n;
     const symbolStart = block * SYMBOL_BLOCK_SIZE;
@@ -2050,7 +2093,7 @@ function bitsToBytes(symbols: number[]) {
     }
     const byteStart = block * SYMBOL_BLOCK_BYTES;
     for (let offset = SYMBOL_BLOCK_BYTES - 1; offset >= 0; offset--) {
-      bytes[byteStart + offset] = Number(value & 255n);
+      if (byteStart + offset < bytes.length) bytes[byteStart + offset] = Number(value & 255n);
       value >>= 8n;
     }
   }
@@ -2212,4 +2255,54 @@ function boundChunkCrc(chunkIndex: number, payload: Uint8Array) {
   bytes[3] = chunkIndex;
   bytes.set(payload, 4);
   return crc32(bytes);
+}
+
+function hammingEncodeBytes(bytes: Uint8Array) {
+  const dataSymbols: number[] = [];
+  for (const byte of bytes) {
+    dataSymbols.push((byte >> 6) & 3, (byte >> 4) & 3, (byte >> 2) & 3, byte & 3);
+  }
+  const encoded = new Array<number>(SYMBOL_COUNT).fill(0);
+  let output = 0;
+  for (let offset = 0; offset < dataSymbols.length; offset += HAMMING_DATA_SYMBOLS) {
+    const data = [0, 1, 2, 3].map((index) => dataSymbols[offset + index] ?? 0);
+    const code = new Array<number>(HAMMING_CODE_SYMBOLS).fill(0);
+    for (let bit = 0; bit < 2; bit++) {
+      const d = data.map((symbol) => (symbol >> bit) & 1);
+      const plane = [d[0] ^ d[1] ^ d[3], d[0] ^ d[2] ^ d[3], d[0], d[1] ^ d[2] ^ d[3], d[1], d[2], d[3]];
+      for (let index = 0; index < HAMMING_CODE_SYMBOLS; index++) code[index] |= plane[index] << bit;
+    }
+    for (const symbol of code) encoded[output++] = symbol;
+  }
+  return encoded;
+}
+
+function hammingDecodeSymbols(symbols: number[]) {
+  const dataSymbols: number[] = [];
+  const groupCount = Math.floor(HAMMING_SOURCE_SYMBOL_COUNT / HAMMING_DATA_SYMBOLS);
+  for (let group = 0; group < groupCount; group++) {
+    const code = symbols.slice(group * HAMMING_CODE_SYMBOLS, group * HAMMING_CODE_SYMBOLS + HAMMING_CODE_SYMBOLS);
+    const data = [0, 0, 0, 0];
+    for (let bit = 0; bit < 2; bit++) {
+      const plane = code.map((symbol) => (symbol >> bit) & 1);
+      const syndrome =
+        (plane[0] ^ plane[2] ^ plane[4] ^ plane[6]) |
+        ((plane[1] ^ plane[2] ^ plane[5] ^ plane[6]) << 1) |
+        ((plane[3] ^ plane[4] ^ plane[5] ^ plane[6]) << 2);
+      if (syndrome > 0 && syndrome <= HAMMING_CODE_SYMBOLS) plane[syndrome - 1] ^= 1;
+      const decoded = [plane[2], plane[4], plane[5], plane[6]];
+      for (let index = 0; index < data.length; index++) data[index] |= decoded[index] << bit;
+    }
+    dataSymbols.push(...data);
+  }
+  const bytes = new Uint8Array(RAW_CHUNK_BYTES);
+  for (let index = 0; index < bytes.length; index++) {
+    const offset = index * 4;
+    bytes[index] =
+      ((dataSymbols[offset] ?? 0) << 6) |
+      ((dataSymbols[offset + 1] ?? 0) << 4) |
+      ((dataSymbols[offset + 2] ?? 0) << 2) |
+      (dataSymbols[offset + 3] ?? 0);
+  }
+  return bytes;
 }
