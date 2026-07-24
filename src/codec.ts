@@ -1094,7 +1094,7 @@ function decodeChunkBytes(allBytes: Uint8Array): DecodeResult {
   const payload = allBytes.slice(payloadStart, payloadStart + header.payloadLength);
   const crcOk = crc32(payload) === header.chunkCrc
     && (header.chunkBindingCrc === undefined || boundChunkCrc(header.chunkIndex, payload) === header.chunkBindingCrc);
-  const parityMembers = expandParityMembers(header);
+  const parityMembers = expandParityMembers(header, allBytes.length - HEADER_BYTES);
 
   return {
     ok: crcOk,
@@ -1113,14 +1113,14 @@ function decodeChunkBytes(allBytes: Uint8Array): DecodeResult {
   };
 }
 
-function expandParityMembers(header: Header) {
+function expandParityMembers(header: Header, payloadCapacity: number) {
   if (header.parityMemberIndexes?.length) {
     return { indexes: header.parityMemberIndexes, lengths: header.parityMemberLengths ?? [] };
   }
   const count = header.parityMemberCount ?? 0;
   const start = header.parityStartIndex ?? 0;
   const indexes = Array.from({ length: count }, (_, index) => start + index);
-  const lengths = new Array<number>(count).fill(PAYLOAD_BYTES_PER_IMAGE);
+  const lengths = new Array<number>(count).fill(payloadCapacity);
   if (count && header.parityLastMemberLength !== undefined) lengths[count - 1] = header.parityLastMemberLength;
   return { indexes, lengths };
 }
@@ -1198,7 +1198,7 @@ export function recoverDataChunks(results: DecodeResult[]) {
       }
 
       const memberOffset = indexes.indexOf(missingIndex);
-      const payload = restored.slice(0, lengths[memberOffset] ?? PAYLOAD_BYTES_PER_IMAGE);
+      const payload = restored.slice(0, lengths[memberOffset] ?? restored.length);
       dataByIndex.set(missingIndex, {
         ...parity,
         kind: "data",
@@ -1314,8 +1314,9 @@ function recoverReedSolomonGroup(parityFrames: DecodeResult[], dataByIndex: Map<
   const inverse = invertGaloisMatrix(matrix);
   if (!inverse) return;
 
-  const recovered = missingIndexes.map(() => new Uint8Array(PAYLOAD_BYTES_PER_IMAGE));
-  for (let byteIndex = 0; byteIndex < PAYLOAD_BYTES_PER_IMAGE; byteIndex++) {
+  const parityPayloadBytes = Math.max(...selectedFrames.map((frame) => frame.payload.length));
+  const recovered = missingIndexes.map(() => new Uint8Array(parityPayloadBytes));
+  for (let byteIndex = 0; byteIndex < parityPayloadBytes; byteIndex++) {
     const rightSide = selectedFrames.map((frame) => {
       let value = frame.payload[byteIndex] ?? 0;
       for (let member = 0; member < indexes.length; member++) {
@@ -1340,7 +1341,7 @@ function recoverReedSolomonGroup(parityFrames: DecodeResult[], dataByIndex: Map<
       ...reference,
       kind: "data",
       chunkIndex: missingIndexes[missing],
-      payload: recovered[missing].slice(0, lengths[member] ?? PAYLOAD_BYTES_PER_IMAGE),
+      payload: recovered[missing].slice(0, lengths[member] ?? recovered[missing].length),
       message: "recovered from Reed-Solomon parity",
       parityMemberIndexes: undefined,
       parityMemberLengths: undefined,

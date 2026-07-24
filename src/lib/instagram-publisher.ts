@@ -598,7 +598,7 @@ async function waitForContainers(
       }
       if (status?.status_code === "ERROR" || status?.status_code === "EXPIRED") {
         parts[partIndex] = { ...parts[partIndex], status: "failed" };
-        if (requestId) await recordPublicationStatus(requestId, "failed", `Instagram could not process ${labels[partIndex]}.`, parts);
+        if (requestId) await recordPublicationStatus(requestId, "processing", undefined, parts);
         console.error("[instagram-publish] container failed", { containerId, response: status });
         throw new Error(`Instagram could not process ${labels[partIndex]}.`);
       }

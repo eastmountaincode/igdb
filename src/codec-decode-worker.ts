@@ -189,7 +189,7 @@ function decodeChunkBytes(profile: WorkerCodecProfile, allBytes: Uint8Array): De
   const crcOk = crc32(payload) === header.chunkCrc
     && (header.chunkBindingCrc === undefined || boundChunkCrc(header.chunkIndex, payload) === header.chunkBindingCrc);
   const payloadBuffer = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength) as ArrayBuffer;
-  const parityMembers = expandParityMembers(profile, header);
+  const parityMembers = expandParityMembers(header, allBytes.length - profile.headerBytes);
 
   return {
     ok: crcOk,
@@ -230,14 +230,14 @@ function normalizeHeader(header: Header | CompactHeader): Header {
   };
 }
 
-function expandParityMembers(profile: WorkerCodecProfile, header: Header) {
+function expandParityMembers(header: Header, payloadCapacity: number) {
   if (header.parityMemberIndexes?.length) {
     return { indexes: header.parityMemberIndexes, lengths: header.parityMemberLengths ?? [] };
   }
   const count = header.parityMemberCount ?? 0;
   const start = header.parityStartIndex ?? 0;
   const indexes = Array.from({ length: count }, (_, index) => start + index);
-  const lengths = new Array<number>(count).fill(profile.rawChunkBytes - profile.headerBytes);
+  const lengths = new Array<number>(count).fill(payloadCapacity);
   if (count && header.parityLastMemberLength !== undefined) lengths[count - 1] = header.parityLastMemberLength;
   return { indexes, lengths };
 }
