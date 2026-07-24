@@ -209,7 +209,7 @@ export function InstagramPixelDbApp() {
     try {
       const videos = await encodeFileAsVideos(file, setEncodeProgress);
       if (videos.length >= 8) {
-        throw new Error("This file needs all eight carousel videos. Choose a file 25 MB or smaller so the display video fits first.");
+        throw new Error("This file needs all eight carousel videos. Choose a file 14 MB or smaller so the display video fits first.");
       }
       setEncodedVideos(videos);
       setEncodeProgress({ phase: videos.length > 1 ? "MP4 set ready" : "MP4 ready", completed: videos.length, total: videos.length });
