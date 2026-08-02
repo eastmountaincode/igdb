@@ -17,6 +17,7 @@ const INSTAGRAM_ACCOUNT_ID = "28189490653969128";
 const INSTAGRAM_USERNAME = "normal_shopkeep";
 const JOB_ROOT = join(process.cwd(), ".instagram-uploads");
 const QUEUE_LOCK_PATH = join(JOB_ROOT, ".publisher-queue.lock");
+const MAX_INSTAGRAM_VIDEO_BYTES = 100 * 1024 * 1024;
 const execFileAsync = promisify(execFile);
 
 type StagedJob = {
@@ -130,19 +131,21 @@ export async function stageInstagramVideoPart(input: {
 
   const fileName = `part-${String(input.partIndex + 1).padStart(2, "0")}.mp4`;
   const inputPath = join(directory, `input-${String(input.partIndex + 1).padStart(2, "0")}.mp4`);
+  const outputPath = join(directory, fileName);
   await writeFile(inputPath, Buffer.from(await input.video.arrayBuffer()));
   try {
     if (input.displayCover && input.partIndex === 0) {
-      await normalizeCoverVideo(inputPath, join(directory, fileName));
+      await normalizeCoverVideo(inputPath, outputPath);
     } else {
       await normalizeDataVideo(
         inputPath,
-        join(directory, fileName),
+        outputPath,
         input.audioPayload ? new Uint8Array(await input.audioPayload.arrayBuffer()) : undefined,
         directory,
         input.partIndex
       );
     }
+    await assertInstagramVideoSize(outputPath);
   } finally {
     await rm(inputPath, { force: true });
   }
@@ -362,14 +365,19 @@ async function stageJob(videos: File[], audioPayloads: File[], metadata: Instagr
     const fileName = `part-${String(index + 1).padStart(2, "0")}.mp4`;
     const inputPath = join(directory, `input-${String(index + 1).padStart(2, "0")}.mp4`);
     await writeFile(inputPath, Buffer.from(await videos[index].arrayBuffer()));
-    await normalizeDataVideo(
-      inputPath,
-      join(directory, fileName),
-      audioPayloads[index] ? new Uint8Array(await audioPayloads[index].arrayBuffer()) : undefined,
-      directory,
-      index
-    );
-    await rm(inputPath, { force: true });
+    const outputPath = join(directory, fileName);
+    try {
+      await normalizeDataVideo(
+        inputPath,
+        outputPath,
+        audioPayloads[index] ? new Uint8Array(await audioPayloads[index].arrayBuffer()) : undefined,
+        directory,
+        index
+      );
+      await assertInstagramVideoSize(outputPath);
+    } finally {
+      await rm(inputPath, { force: true });
+    }
     files.push(fileName);
   }
 
@@ -608,6 +616,14 @@ async function waitForContainers(
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
   throw new Error("Instagram video processing timed out.");
+}
+
+async function assertInstagramVideoSize(path: string) {
+  const size = (await stat(path)).size;
+  if (size > MAX_INSTAGRAM_VIDEO_BYTES) {
+    await rm(path, { force: true });
+    throw new Error("Server normalization could not reduce a video below Instagram's 100 MB limit.");
+  }
 }
 
 async function normalizeCoverVideo(inputPath: string, outputPath: string) {

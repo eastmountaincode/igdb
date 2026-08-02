@@ -34,7 +34,7 @@ record_error() {
     return
   fi
   at=$(date -u +%FT%TZ)
-  if grep -Eqi 'sha-256 verification failed|hash mismatch|missing chunks|could not recover|required chunks|unrecoverable|corrupt|unsupported codec|no supported codec' <<<"$message"; then
+  if grep -Eqi 'sha-256 verification failed|hash mismatch|missing chunks|only [0-9]+/[0-9]+ chunks were recovered|could not recover|required chunks|unrecoverable|corrupt|unsupported codec|no supported codec' <<<"$message"; then
     error_field="decodeError"
     status_label="CORRUPT"
   else

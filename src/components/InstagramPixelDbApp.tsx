@@ -662,6 +662,9 @@ export function InstagramPixelDbApp() {
             <p>
               Made by <a href="https://www.andrew-boylan.com/" target="_blank" rel="noreferrer">Andrew Boylan</a>.
             </p>
+            <p>
+              <a href="https://ko-fi.com/goodbyeoblivion" target="_blank" rel="noreferrer">Support Normal Shopkeep on Ko-fi</a>.
+            </p>
 
           </fieldset>
         </section>

@@ -4,7 +4,7 @@ import { MAX_SOURCE_FILE_BYTES, MAX_SOURCE_FILE_LABEL } from "@/upload-limits";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+const MAX_INBOUND_VIDEO_BYTES = 512 * 1024 * 1024;
 const MAX_ADDED_BY_LENGTH = 100;
 const MAX_NOTE_LENGTH = 1000;
 const MAX_PUBLISHES_PER_ADDRESS_PER_HOUR = 30;
@@ -59,8 +59,14 @@ export async function POST(request: Request) {
       return Response.json({ error: "Upload between 1 and 8 MP4 videos." }, { status: 400 });
     }
     for (const video of videos) {
-      if (video.size <= 0 || video.size > MAX_VIDEO_BYTES || (video.type && video.type !== "video/mp4")) {
-        return Response.json({ error: "Every upload must be an MP4 smaller than 100 MB." }, { status: 400 });
+      if (video.size <= 0) {
+        return Response.json({ error: "A generated video is empty." }, { status: 400 });
+      }
+      if (video.size > MAX_INBOUND_VIDEO_BYTES) {
+        return Response.json({ error: "A generated video is too large for server normalization." }, { status: 413 });
+      }
+      if (video.type && !video.type.toLowerCase().startsWith("video/mp4")) {
+        return Response.json({ error: "A generated upload is not an MP4 video." }, { status: 400 });
       }
     }
     if (audioPayloads.length && audioPayloads.length !== videos.length) {
