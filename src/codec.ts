@@ -1,16 +1,16 @@
 import {
   AUDIO_PROBE_DURATION_SECONDS,
   AUDIO_PROBE_PAYLOAD_BYTES,
-  AUDIO_PROBE_SAMPLE_RATE,
   audioProbeByteCapacityForDuration,
   audioProbeDurationForByteLength,
-  decodeDtmfProbeBytePacketsFromFile,
-  synthesizeDtmfProbePackets
+  decodeDtmfProbeBytePacketsFromFile
 } from "./audio-codec";
+import type { CodecFormatId } from "./codec-registry";
+import { sha256Hex } from "./sha256";
 
-export const CANVAS_SIZE = 1080;
-export const CELL_SIZE = 6;
-export const GRID_ORIGIN = 72;
+export const CANVAS_SIZE = 720;
+export const CELL_SIZE = 4;
+export const GRID_ORIGIN = 48;
 export const GRID_CELLS = 156;
 export const MAX_POST_IMAGES = 8;
 export const palette = [
@@ -23,22 +23,34 @@ export const palette = [
 ] as const;
 const SYMBOL_COUNT = GRID_CELLS * GRID_CELLS;
 const SYMBOL_RADIX = palette.length;
+const SYMBOL_BLOCK_BYTES = 8;
+const SYMBOL_BLOCK_SIZE = 25;
+const SPATIAL_SYMBOL_COPIES = 3;
+const SPATIAL_SYMBOL_COUNT = Math.floor(SYMBOL_COUNT / SPATIAL_SYMBOL_COPIES);
+const SPATIAL_RAW_CHUNK_BYTES = Math.floor(SPATIAL_SYMBOL_COUNT / SYMBOL_BLOCK_SIZE) * SYMBOL_BLOCK_BYTES;
+const LEGACY_RAW_CHUNK_BYTES = Math.floor(SYMBOL_COUNT / SYMBOL_BLOCK_SIZE) * SYMBOL_BLOCK_BYTES;
+const HAMMING_DATA_SYMBOLS = 4;
+const HAMMING_CODE_SYMBOLS = 7;
+const HAMMING_SOURCE_SYMBOL_COUNT = Math.floor(SYMBOL_COUNT / HAMMING_CODE_SYMBOLS) * HAMMING_DATA_SYMBOLS;
 export const HEADER_BYTES = 512;
-export const RAW_CHUNK_BYTES = Math.floor((SYMBOL_COUNT * Math.log2(SYMBOL_RADIX)) / 8);
+export const RAW_CHUNK_BYTES = Math.floor(HAMMING_SOURCE_SYMBOL_COUNT / 4);
 export const PAYLOAD_BYTES_PER_IMAGE = RAW_CHUNK_BYTES - HEADER_BYTES;
 export const VIDEO_FPS = 30;
-export const VIDEO_REPEAT_FRAMES = 6;
-export const VIDEO_PARITY_GROUP_SIZE = 2;
-export const VIDEO_TARGET_SECONDS = 55;
+export const VIDEO_REPEAT_FRAMES = 2;
+const INSTAGRAM_MIN_VIDEO_SECONDS = 3;
+export const VIDEO_PARITY_GROUP_SIZE = 64;
+export const VIDEO_PARITY_FRAMES_PER_GROUP = 12;
+export const VIDEO_TARGET_SECONDS = 60;
+const VIDEO_STARTUP_DUPLICATE_FRAMES = 8;
 const AUDIO_PACKETS_PER_VIDEO = Math.floor(VIDEO_TARGET_SECONDS / AUDIO_PROBE_DURATION_SECONDS);
 const AUDIO_PAYLOAD_BYTES = AUDIO_PACKETS_PER_VIDEO * AUDIO_PROBE_PAYLOAD_BYTES;
-export const VIDEO_BITRATE = 12_000_000;
+export const VIDEO_BITRATE = 6_000_000;
 export const VIDEO_EFFECTIVE_BYTES_PER_SECOND = Math.floor(
   (PAYLOAD_BYTES_PER_IMAGE * VIDEO_FPS * VIDEO_PARITY_GROUP_SIZE) /
-    (VIDEO_REPEAT_FRAMES * (VIDEO_PARITY_GROUP_SIZE + 1))
+    (VIDEO_REPEAT_FRAMES * (VIDEO_PARITY_GROUP_SIZE + VIDEO_PARITY_FRAMES_PER_GROUP))
 );
 export const VIDEO_TARGET_BYTES =
-  maxDataChunksForTargetVideo(VIDEO_REPEAT_FRAMES, VIDEO_TARGET_SECONDS) * PAYLOAD_BYTES_PER_IMAGE + AUDIO_PAYLOAD_BYTES;
+  maxDataChunksForTargetVideo(VIDEO_REPEAT_FRAMES, VIDEO_TARGET_SECONDS) * PAYLOAD_BYTES_PER_IMAGE;
 
 export type EncodedImage = {
   canvas: HTMLCanvasElement;
@@ -59,8 +71,11 @@ export type DecodeResult = {
   totalChunks: number;
   payload: Uint8Array;
   message: string;
+  codecId: CodecFormatId;
+  payloadVersion: number;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
+  parityRow?: number;
 };
 
 export type FileManifest = {
@@ -79,6 +94,7 @@ export type FileManifest = {
 
 export type EncodedVideo = {
   blob: Blob;
+  audioPayload?: Blob;
   url: string;
   frameCount: number;
   chunkCount: number;
@@ -117,11 +133,36 @@ type Header = {
   totalChunks: number;
   payloadLength: number;
   chunkCrc: number;
+  chunkBindingCrc?: number;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
+  parityStartIndex?: number;
+  parityMemberCount?: number;
+  parityLastMemberLength?: number;
+  parityRow?: number;
 };
 
-type ChunkKind = "data" | "xor";
+type CompactHeader = {
+  v: 2;
+  k: "d" | "x" | "r";
+  n: string;
+  m: string;
+  s: number;
+  h: string;
+  i: number;
+  t: number;
+  l: number;
+  c: number;
+  d?: number;
+  a?: number[];
+  b?: number[];
+  p?: number;
+  q?: number;
+  r?: number;
+  u?: number;
+};
+
+type ChunkKind = "data" | "xor" | "rs";
 type FrameSource = HTMLCanvasElement | ImageBitmap;
 
 type RenderChunkJob = {
@@ -190,9 +231,9 @@ type SerializedDecodeResult = Omit<DecodeResult, "payload"> & {
 };
 
 const MAGIC = [70, 84, 73, 71]; // FTIG
-const VERSION = 1;
+const VERSION = 3;
 const ENCODE_WORKER_COUNT = 2;
-const SEGMENT_ENCODE_CONCURRENCY = 1;
+const SEGMENT_ENCODE_CONCURRENCY = 2;
 const DECODE_WORKER_COUNT = 2;
 const DECODE_WORKER_BACKLOG = DECODE_WORKER_COUNT * 3;
 const ENABLE_ENCODE_WORKERS = false;
@@ -203,7 +244,7 @@ const decoder = new TextDecoder();
 export function capacitySummary() {
   const videoMaxDataChunks = maxDataChunksForTargetVideo(VIDEO_REPEAT_FRAMES, VIDEO_TARGET_SECONDS);
   const videoMaxVisualPayloadBytes = videoMaxDataChunks * PAYLOAD_BYTES_PER_IMAGE;
-  const videoMaxPayloadBytes = videoMaxVisualPayloadBytes + AUDIO_PAYLOAD_BYTES;
+  const videoMaxPayloadBytes = videoMaxVisualPayloadBytes;
   return {
     canvasSize: CANVAS_SIZE,
     cellSize: CELL_SIZE,
@@ -224,7 +265,7 @@ export function capacitySummary() {
     videoMaxVisualPayloadBytes,
     videoMaxAudioPayloadBytes: AUDIO_PAYLOAD_BYTES,
     videoMaxAudioPackets: AUDIO_PACKETS_PER_VIDEO,
-    videoMaxTransmittedChunks: videoMaxDataChunks + Math.ceil(videoMaxDataChunks / VIDEO_PARITY_GROUP_SIZE)
+    videoMaxTransmittedChunks: videoMaxDataChunks + Math.ceil(videoMaxDataChunks / VIDEO_PARITY_GROUP_SIZE) * VIDEO_PARITY_FRAMES_PER_GROUP
   };
 }
 
@@ -288,7 +329,8 @@ export async function encodeFile(file: File): Promise<{ images: EncodedImage[]; 
       chunkIndex,
       totalChunks,
       payloadLength: payload.length,
-      chunkCrc: crc32(payload)
+      chunkCrc: crc32(payload),
+      chunkBindingCrc: boundChunkCrc(chunkIndex, payload)
     };
     const canvas = encodeChunk(header, payload);
     images.push({
@@ -329,7 +371,7 @@ async function encodeFileAsHybridVideos(
   const fileHash = await sha256Hex(bytes);
   const maxVisualChunksPerVideo = maxDataChunksForTargetVideo(VIDEO_REPEAT_FRAMES, VIDEO_TARGET_SECONDS);
   const segments = planHybridSegments(bytes.length, maxVisualChunksPerVideo);
-  const totalChunks = segments.reduce((sum, segment) => sum + segment.visualChunks.length + segment.audioChunks.length, 0);
+  const totalChunks = segments.reduce((sum, segment) => sum + segment.visualChunks.length, 0);
   const encodeSegment = (segmentIndex: number, segmentProgress?: (progress: EncodeVideoProgress) => void) =>
     encodeHybridVideoSegment({
       bytes,
@@ -401,7 +443,7 @@ async function encodeVideoSegment({
   const chunkStart = segmentIndex * maxDataChunksPerVideo;
   const chunkEnd = Math.min(totalChunks, chunkStart + maxDataChunksPerVideo);
   const dataChunkCount = chunkEnd - chunkStart;
-  const parityChunks = Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE);
+  const parityChunks = Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE) * VIDEO_PARITY_FRAMES_PER_GROUP;
   const totalCanvasWork = dataChunkCount + parityChunks;
   const dataPayloads: Uint8Array[] = [];
   const renderJobs: RenderChunkJob[] = [];
@@ -424,7 +466,8 @@ async function encodeVideoSegment({
         chunkIndex,
         totalChunks,
         payloadLength: payload.length,
-        chunkCrc: crc32(payload)
+        chunkCrc: crc32(payload),
+        chunkBindingCrc: boundChunkCrc(chunkIndex, payload)
       },
       payload
     });
@@ -433,41 +476,46 @@ async function encodeVideoSegment({
     await yieldToBrowser();
   }
 
-  let parityIndex = Math.floor(chunkStart / VIDEO_PARITY_GROUP_SIZE);
+  let parityIndex = Math.floor(chunkStart / VIDEO_PARITY_GROUP_SIZE) * VIDEO_PARITY_FRAMES_PER_GROUP;
   for (let groupStart = 0; groupStart < dataPayloads.length; groupStart += VIDEO_PARITY_GROUP_SIZE) {
     const group = dataPayloads.slice(groupStart, groupStart + VIDEO_PARITY_GROUP_SIZE);
-    const parityPayload = xorPayloads(group);
-    const memberIndexes = group.map((_, index) => chunkStart + groupStart + index);
-    renderJobs.push({
-      order: renderJobs.length,
-      header: {
-        kind: "xor",
-        fileName: file.name,
-        mimeType: file.type || "application/octet-stream",
-        fileSize: bytes.length,
-        fileHash,
-        chunkIndex: totalChunks + parityIndex,
-        totalChunks,
-        payloadLength: parityPayload.length,
-        chunkCrc: crc32(parityPayload),
-        parityMemberIndexes: memberIndexes,
-        parityMemberLengths: group.map((payload) => payload.length)
-      },
-      payload: parityPayload
-    });
-    parityIndex++;
-    preparedChunks++;
-    onProgress?.({ phase: `Preparing chunks${segmentLabel}`, completed: preparedChunks, total: totalCanvasWork });
-    await yieldToBrowser();
+    const parityStartIndex = chunkStart + groupStart;
+    for (const [parityRow, parityPayload] of buildReedSolomonParity(group).entries()) {
+      renderJobs.push({
+        order: renderJobs.length,
+        header: {
+          kind: "rs",
+          fileName: file.name,
+          mimeType: file.type || "application/octet-stream",
+          fileSize: bytes.length,
+          fileHash,
+          chunkIndex: totalChunks + parityIndex,
+          totalChunks,
+          payloadLength: parityPayload.length,
+          chunkCrc: crc32(parityPayload),
+          chunkBindingCrc: boundChunkCrc(totalChunks + parityIndex, parityPayload),
+          parityStartIndex,
+          parityMemberCount: group.length,
+          parityLastMemberLength: group.at(-1)?.length,
+          parityRow
+        },
+        payload: parityPayload
+      });
+      parityIndex++;
+      preparedChunks++;
+      onProgress?.({ phase: `Preparing chunks${segmentLabel}`, completed: preparedChunks, total: totalCanvasWork });
+      await yieldToBrowser();
+    }
   }
 
-  const blob = await recordChunkJobsAsMp4(renderJobs, repeatFrames, VIDEO_FPS, (progress) =>
+  const orderedRenderJobs = interleaveParityGroups(renderJobs, dataChunkCount);
+  const blob = await recordChunkJobsAsMp4(orderedRenderJobs, repeatFrames, VIDEO_FPS, (progress) =>
     onProgress?.({
       ...progress,
       phase: totalSegments > 1 ? `${progress.phase} ${segmentIndex + 1}/${totalSegments}` : progress.phase
     })
   );
-  const durationSeconds = (renderJobs.length * repeatFrames) / VIDEO_FPS;
+  const durationSeconds = (orderedRenderJobs.length * repeatFrames) / VIDEO_FPS;
   const payloadBytes =
     chunkStart * PAYLOAD_BYTES_PER_IMAGE >= bytes.length
       ? 0
@@ -475,7 +523,7 @@ async function encodeVideoSegment({
   return {
     blob,
     url: URL.createObjectURL(blob),
-    frameCount: renderJobs.length * repeatFrames,
+    frameCount: orderedRenderJobs.length * repeatFrames,
     chunkCount: renderJobs.length,
     payloadBytes,
     fileBytes: bytes.length,
@@ -495,7 +543,7 @@ async function encodeVideoSegment({
       `chunks=${renderJobs.length}`,
       `fps=${VIDEO_FPS}`,
       `repeat=${repeatFrames}`,
-      `parity=xor-${VIDEO_PARITY_GROUP_SIZE}+1`,
+      `parity=rs-${VIDEO_PARITY_GROUP_SIZE}+${VIDEO_PARITY_FRAMES_PER_GROUP}`,
       `codec=colorgrid${palette.length}-h264-mp4`,
       `size=${bytes.length}`,
       `sha256=${fileHash}`
@@ -509,17 +557,8 @@ function planHybridSegments(fileSize: number, maxVisualChunksPerVideo: number): 
   let chunkIndex = 0;
   const maxVisualBytesPerVideo = maxVisualChunksPerVideo * PAYLOAD_BYTES_PER_IMAGE;
   while (offset < fileSize) {
-    const remainingBytes = fileSize - offset;
-    const maxAudioBytesForSegment = Math.min(AUDIO_PAYLOAD_BYTES, Math.max(0, remainingBytes - 1));
-    const initialVisualBytes = Math.min(remainingBytes - (maxAudioBytesForSegment ? 1 : 0), maxVisualBytesPerVideo);
-    const visualChunkCount = Math.ceil(initialVisualBytes / PAYLOAD_BYTES_PER_IMAGE);
-    const visualDurationSeconds = transmittedFrameCountForDataChunks(visualChunkCount) * (VIDEO_REPEAT_FRAMES / VIDEO_FPS);
-    const audioCapacityBytes = audioProbeByteCapacityForDuration(visualDurationSeconds, AUDIO_PAYLOAD_BYTES);
-    const audioBytesForSegment = Math.min(maxAudioBytesForSegment, Math.max(maxAudioBytesForSegment ? 1 : 0, audioCapacityBytes));
-    const visualBytesForSegment = Math.min(remainingBytes - audioBytesForSegment, maxVisualBytesPerVideo);
     const segmentStart = offset;
-    const visualEnd = segmentStart + visualBytesForSegment;
-    const audioEnd = visualEnd + audioBytesForSegment;
+    const visualEnd = Math.min(fileSize, segmentStart + maxVisualBytesPerVideo);
     const visualChunks: HybridSegmentPlan["visualChunks"] = [];
     while (offset < visualEnd) {
       const payloadLength = Math.min(PAYLOAD_BYTES_PER_IMAGE, visualEnd - offset);
@@ -528,19 +567,16 @@ function planHybridSegments(fileSize: number, maxVisualChunksPerVideo: number): 
       chunkIndex++;
     }
 
+    const visualDurationSeconds = transmittedFrameCountForDataChunks(visualChunks.length) * (VIDEO_REPEAT_FRAMES / VIDEO_FPS);
+    const audioBytesForSegment = Math.min(
+      visualEnd - segmentStart,
+      audioProbeByteCapacityForDuration(visualDurationSeconds, AUDIO_PAYLOAD_BYTES)
+    );
     const audioChunks: HybridSegmentPlan["audioChunks"] = [];
-    while (offset < audioEnd) {
-      const payloadLength = Math.min(AUDIO_PROBE_PAYLOAD_BYTES, audioEnd - offset);
-      audioChunks.push({ chunkIndex, payloadStart: offset, payloadLength });
-      offset += payloadLength;
-      chunkIndex++;
-    }
-
-    if (!visualChunks.length && !audioChunks.length) {
-      const payloadLength = Math.min(PAYLOAD_BYTES_PER_IMAGE, fileSize - offset);
-      visualChunks.push({ chunkIndex, payloadStart: offset, payloadLength });
-      offset += payloadLength;
-      chunkIndex++;
+    for (let audioOffset = segmentStart; audioOffset < segmentStart + audioBytesForSegment;) {
+      const payloadLength = Math.min(AUDIO_PROBE_PAYLOAD_BYTES, segmentStart + audioBytesForSegment - audioOffset);
+      audioChunks.push({ chunkIndex: visualChunks[0]?.chunkIndex ?? 0, payloadStart: audioOffset, payloadLength });
+      audioOffset += payloadLength;
     }
 
     segments.push({ segmentIndex: segments.length, visualChunks, audioChunks });
@@ -550,7 +586,9 @@ function planHybridSegments(fileSize: number, maxVisualChunksPerVideo: number): 
 
 function transmittedFrameCountForDataChunks(dataChunkCount: number) {
   if (dataChunkCount <= 0) return 0;
-  return dataChunkCount + Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE);
+  return dataChunkCount
+    + Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE) * VIDEO_PARITY_FRAMES_PER_GROUP
+    + Math.min(dataChunkCount, VIDEO_STARTUP_DUPLICATE_FRAMES);
 }
 
 async function encodeHybridVideoSegment({
@@ -564,7 +602,7 @@ async function encodeHybridVideoSegment({
   onProgress
 }: EncodeHybridSegmentInput): Promise<EncodedVideo> {
   const dataChunkCount = segment.visualChunks.length;
-  const parityChunks = Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE);
+  const parityChunks = Math.ceil(dataChunkCount / VIDEO_PARITY_GROUP_SIZE) * VIDEO_PARITY_FRAMES_PER_GROUP;
   const totalCanvasWork = dataChunkCount + parityChunks;
   const dataPayloads: Uint8Array[] = [];
   const renderJobs: RenderChunkJob[] = [];
@@ -586,7 +624,8 @@ async function encodeHybridVideoSegment({
         chunkIndex: chunk.chunkIndex,
         totalChunks,
         payloadLength: payload.length,
-        chunkCrc: crc32(payload)
+        chunkCrc: crc32(payload),
+        chunkBindingCrc: boundChunkCrc(chunk.chunkIndex, payload)
       },
       payload
     });
@@ -595,37 +634,42 @@ async function encodeHybridVideoSegment({
     await yieldToBrowser();
   }
 
-  let parityIndex = Math.floor((segment.visualChunks[0]?.chunkIndex ?? 0) / VIDEO_PARITY_GROUP_SIZE);
+  let parityIndex = Math.floor((segment.visualChunks[0]?.chunkIndex ?? 0) / VIDEO_PARITY_GROUP_SIZE) * VIDEO_PARITY_FRAMES_PER_GROUP;
   for (let groupStart = 0; groupStart < dataPayloads.length; groupStart += VIDEO_PARITY_GROUP_SIZE) {
     const group = dataPayloads.slice(groupStart, groupStart + VIDEO_PARITY_GROUP_SIZE);
-    const parityPayload = xorPayloads(group);
-    const memberIndexes = group.map((_, index) => segment.visualChunks[groupStart + index].chunkIndex);
-    renderJobs.push({
-      order: renderJobs.length,
-      header: {
-        kind: "xor",
-        fileName: file.name,
-        mimeType: file.type || "application/octet-stream",
-        fileSize: bytes.length,
-        fileHash,
-        chunkIndex: totalChunks + parityIndex,
-        totalChunks,
-        payloadLength: parityPayload.length,
-        chunkCrc: crc32(parityPayload),
-        parityMemberIndexes: memberIndexes,
-        parityMemberLengths: group.map((payload) => payload.length)
-      },
-      payload: parityPayload
-    });
-    parityIndex++;
-    preparedChunks++;
-    onProgress?.({ phase: `Preparing chunks${segmentLabel}`, completed: preparedChunks, total: totalCanvasWork });
-    await yieldToBrowser();
+    const parityStartIndex = segment.visualChunks[groupStart].chunkIndex;
+    for (const [parityRow, parityPayload] of buildReedSolomonParity(group).entries()) {
+      renderJobs.push({
+        order: renderJobs.length,
+        header: {
+          kind: "rs",
+          fileName: file.name,
+          mimeType: file.type || "application/octet-stream",
+          fileSize: bytes.length,
+          fileHash,
+          chunkIndex: totalChunks + parityIndex,
+          totalChunks,
+          payloadLength: parityPayload.length,
+          chunkCrc: crc32(parityPayload),
+          chunkBindingCrc: boundChunkCrc(totalChunks + parityIndex, parityPayload),
+          parityStartIndex,
+          parityMemberCount: group.length,
+          parityLastMemberLength: group.at(-1)?.length,
+          parityRow
+        },
+        payload: parityPayload
+      });
+      parityIndex++;
+      preparedChunks++;
+      onProgress?.({ phase: `Preparing chunks${segmentLabel}`, completed: preparedChunks, total: totalCanvasWork });
+      await yieldToBrowser();
+    }
   }
 
   const audioPayloads = segment.audioChunks.map((chunk) => bytes.slice(chunk.payloadStart, chunk.payloadStart + chunk.payloadLength));
+  const orderedRenderJobs = interleaveParityGroups(renderJobs, dataChunkCount);
   const blob = await recordChunkJobsAsMp4(
-    renderJobs,
+    orderedRenderJobs,
     repeatFrames,
     VIDEO_FPS,
     (progress) =>
@@ -636,28 +680,31 @@ async function encodeHybridVideoSegment({
     audioPayloads
   );
   const durationSeconds = Math.max(
-    (renderJobs.length * repeatFrames) / VIDEO_FPS,
-    audioPayloads.reduce((sum, payload) => sum + audioProbeDurationForByteLength(payload.length), 0)
+    (orderedRenderJobs.length * repeatFrames) / VIDEO_FPS,
+    audioPayloads.reduce((sum, payload) => sum + audioProbeDurationForByteLength(payload.length), 0),
+    INSTAGRAM_MIN_VIDEO_SECONDS
   );
   const visualPayloadBytes = segment.visualChunks.reduce((sum, chunk) => sum + chunk.payloadLength, 0);
   const audioPayloadBytes = segment.audioChunks.reduce((sum, chunk) => sum + chunk.payloadLength, 0);
   const firstVisualChunk = segment.visualChunks[0];
   const lastVisualChunk = segment.visualChunks.at(-1);
   const firstAudioChunk = segment.audioChunks[0];
-  const lastAudioChunk = segment.audioChunks.at(-1);
   return {
     blob,
+    audioPayload: audioPayloadBytes > 0
+      ? new Blob(audioPayloads, { type: "application/octet-stream" })
+      : undefined,
     url: URL.createObjectURL(blob),
-    frameCount: renderJobs.length * repeatFrames,
-    chunkCount: renderJobs.length + segment.audioChunks.length,
-    payloadBytes: visualPayloadBytes + audioPayloadBytes,
+    frameCount: orderedRenderJobs.length * repeatFrames,
+    chunkCount: renderJobs.length,
+    payloadBytes: visualPayloadBytes,
     fileBytes: bytes.length,
     durationSeconds,
     segmentIndex: segment.segmentIndex,
     totalSegments,
     dataChunkStart: firstVisualChunk?.chunkIndex ?? firstAudioChunk?.chunkIndex ?? 0,
-    dataChunkEnd: lastAudioChunk?.chunkIndex ?? lastVisualChunk?.chunkIndex ?? 0,
-    dataChunkCount: dataChunkCount + segment.audioChunks.length,
+    dataChunkEnd: lastVisualChunk?.chunkIndex ?? 0,
+    dataChunkCount,
     audioPacketCount: segment.audioChunks.length,
     audioPayloadBytes,
     caption: [
@@ -665,17 +712,34 @@ async function encodeHybridVideoSegment({
       `file=${file.name}`,
       `segment=${segment.segmentIndex + 1}/${totalSegments}`,
       `visualChunks=${firstVisualChunk ? `${firstVisualChunk.chunkIndex + 1}-${(lastVisualChunk?.chunkIndex ?? firstVisualChunk.chunkIndex) + 1}` : "none"}/${totalChunks}`,
-      `audioChunks=${firstAudioChunk ? `${firstAudioChunk.chunkIndex + 1}-${(lastAudioChunk?.chunkIndex ?? firstAudioChunk.chunkIndex) + 1}/${totalChunks} ${audioPayloadBytes} bytes` : "none"}`,
+      `audioCopy=${firstAudioChunk ? `${segment.audioChunks.length} packets ${audioPayloadBytes} bytes` : "none"}`,
       `chunks=${renderJobs.length}`,
       `fps=${VIDEO_FPS}`,
       `repeat=${repeatFrames}`,
-      `parity=xor-${VIDEO_PARITY_GROUP_SIZE}+1`,
+      `parity=rs-${VIDEO_PARITY_GROUP_SIZE}+${VIDEO_PARITY_FRAMES_PER_GROUP}`,
       `codec=colorgrid${palette.length}-h264-mp4+dtmf16-aac`,
       `durationTarget=${VIDEO_TARGET_SECONDS}`,
       `size=${bytes.length}`,
       `sha256=${fileHash}`
     ].join("\n")
   };
+}
+
+function interleaveParityGroups(renderJobs: RenderChunkJob[], dataChunkCount: number) {
+  const dataJobs = renderJobs.slice(0, dataChunkCount);
+  const parityJobs = renderJobs.slice(dataChunkCount);
+  const interleaved: RenderChunkJob[] = [];
+
+  for (let memberOffset = 0; memberOffset < VIDEO_PARITY_GROUP_SIZE; memberOffset++) {
+    for (let groupStart = 0; groupStart < dataJobs.length; groupStart += VIDEO_PARITY_GROUP_SIZE) {
+      const job = dataJobs[groupStart + memberOffset];
+      if (job) interleaved.push(job);
+    }
+  }
+
+  interleaved.push(...parityJobs);
+  interleaved.push(...interleaved.slice(0, VIDEO_STARTUP_DUPLICATE_FRAMES));
+  return interleaved.map((job, order) => ({ ...job, order }));
 }
 
 async function encodeSegmentsInParallel(
@@ -742,6 +806,9 @@ async function decodeHybridVideoFile(
   const template = visualChunks.find((chunk) => chunk.ok && chunk.kind === "data");
   if (!template) return visualChunks;
 
+  const fullVisualChunkCount = Math.ceil(template.fileSize / PAYLOAD_BYTES_PER_IMAGE);
+  if (template.totalChunks === fullVisualChunkCount) return visualChunks;
+
   const maxChunkIndex = Math.max(...visualChunks.filter((chunk) => chunk.kind === "data").map((chunk) => chunk.chunkIndex));
   const audioStartChunkIndex = maxChunkIndex + 1;
   const audioChunkCount = Math.min(AUDIO_PACKETS_PER_VIDEO, Math.max(0, template.totalChunks - audioStartChunkIndex));
@@ -770,7 +837,9 @@ async function decodeHybridVideoFile(
         chunkIndex: audioStartChunkIndex + index,
         totalChunks: template.totalChunks,
         payload: audio.bytes,
-        message: `decoded from audio side channel packet ${index + 1}/${audioChunkCount} (${Math.round(audio.confidence * 100)}% sync)`
+        message: `decoded from audio side channel packet ${index + 1}/${audioChunkCount} (${Math.round(audio.confidence * 100)}% sync)`,
+        codecId: template.codecId,
+        payloadVersion: template.payloadVersion
       }];
     });
     return recoverDataChunks([...visualChunks, ...audioChunks]);
@@ -798,7 +867,7 @@ async function decodeVideoFileSingleFrame(
     canvas.width = CANVAS_SIZE;
     canvas.height = CANVAS_SIZE;
     const ctx = requiredContext(canvas);
-    const byChunk = new Map<number, DecodeResult>();
+    const byChunk = new Map<string, DecodeResult>();
     const decodePool = createDecodeWorkerPool();
     const pendingDecodes: Promise<void>[] = [];
     let queuedFrames = 0;
@@ -818,8 +887,9 @@ async function decodeVideoFileSingleFrame(
           if (!decodePool) {
             try {
               const decoded = await decodeFrameData(imageData, decodePool);
-              if (decoded.ok && !byChunk.has(decoded.chunkIndex)) {
-                byChunk.set(decoded.chunkIndex, decoded);
+              const key = decodedChunkKey(decoded);
+              if (decoded.ok && !byChunk.has(key)) {
+                byChunk.set(key, decoded);
               }
             } catch {
               // Video compression can make individual frames undecodable; repeated frames handle this.
@@ -831,8 +901,9 @@ async function decodeVideoFileSingleFrame(
 
           const decodePromise = decodeFrameData(imageData, decodePool)
             .then((decoded) => {
-              if (decoded.ok && !byChunk.has(decoded.chunkIndex)) {
-                byChunk.set(decoded.chunkIndex, decoded);
+              const key = decodedChunkKey(decoded);
+              if (decoded.ok && !byChunk.has(key)) {
+                byChunk.set(key, decoded);
               }
             })
             .catch(() => {
@@ -867,62 +938,69 @@ async function decodeVideoFileSingleFrame(
 
 export async function decodeVideoFileTemporalVote(
   file: File,
-  repeatFrames = VIDEO_REPEAT_FRAMES,
+  repeatFrames = 3,
   onProgress?: (progress: DecodeVideoProgress) => void
 ): Promise<DecodeResult[]> {
-  const video = document.createElement("video");
-  video.muted = true;
-  video.playsInline = true;
-  video.preload = "auto";
-  const url = URL.createObjectURL(file);
-  video.src = url;
   onProgress?.({ phase: "Loading video", completed: 0, total: 1 });
+  const { Input, ALL_FORMATS, BlobSource, CanvasSink } = await import("mediabunny");
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
 
   try {
-    await waitForVideoMetadata(video);
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) throw new Error("Could not find a video track for decoding.");
+    const stats = await track.computePacketStats();
+    const totalFrames = Math.max(1, stats.packetCount);
+    const sink = new CanvasSink(track, { width: CANVAS_SIZE, height: CANVAS_SIZE, fit: "fill" });
     const canvas = document.createElement("canvas");
     canvas.width = CANVAS_SIZE;
     canvas.height = CANVAS_SIZE;
     const ctx = requiredContext(canvas);
-    const duration = Number.isFinite(video.duration) ? video.duration : 0;
-    const totalFrames = Math.max(1, Math.floor(duration * VIDEO_FPS));
-    const symbolGroups = new Map<number, number[][]>();
+    const sampledFrames: number[][] = [];
+    const byChunk = new Map<string, DecodeResult>();
+    let frameIndex = 0;
 
-    for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
-      const time = Math.min(Math.max(0, (frameIndex + 0.5) / VIDEO_FPS), Math.max(0, duration - 0.001));
-      await seekVideo(video, time);
+    for await (const frame of sink.canvases()) {
       ctx.fillStyle = "#fff";
       ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-      ctx.drawImage(video, 0, 0, CANVAS_SIZE, CANVAS_SIZE);
+      ctx.drawImage(frame.canvas, 0, 0, CANVAS_SIZE, CANVAS_SIZE);
       const imageData = ctx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE).data;
-      const groupIndex = Math.floor(frameIndex / repeatFrames);
-      const group = symbolGroups.get(groupIndex) ?? [];
-      group.push(readSymbolsFromImageData(imageData));
-      symbolGroups.set(groupIndex, group);
-      onProgress?.({ phase: "Sampling repeated frames", completed: frameIndex + 1, total: totalFrames });
+      const symbols = readSymbolsFromImageData(imageData);
+      sampledFrames.push(symbols);
+      try {
+        const decoded = decodeSymbols(symbols);
+        const key = decodedChunkKey(decoded);
+        if (decoded.ok && !byChunk.has(key)) {
+          byChunk.set(key, decoded);
+        }
+      } catch {
+        // Temporal voting below recovers frames damaged at video transitions.
+      }
+      frameIndex++;
+      onProgress?.({ phase: "Sampling repeated frames", completed: frameIndex, total: totalFrames });
       if (frameIndex % 8 === 7) await yieldToBrowser();
     }
 
-    const byChunk = new Map<number, DecodeResult>();
+    const windowCount = Math.max(1, sampledFrames.length - repeatFrames + 1);
     let decodedGroups = 0;
-    for (const group of symbolGroups.values()) {
+    for (let start = 0; start < windowCount; start++) {
       try {
-        const decoded = decodeSymbols(majoritySymbols(group));
-        if (decoded.ok && !byChunk.has(decoded.chunkIndex)) {
-          byChunk.set(decoded.chunkIndex, decoded);
+        const decoded = decodeSymbols(majoritySymbols(sampledFrames.slice(start, start + repeatFrames)));
+        const key = decodedChunkKey(decoded);
+        if (decoded.ok && !byChunk.has(key)) {
+          byChunk.set(key, decoded);
         }
       } catch {
         // Compression damage can still make a whole repeated group undecodable.
       }
       decodedGroups++;
-      onProgress?.({ phase: "Majority-vote decoding", completed: decodedGroups, total: symbolGroups.size });
+      onProgress?.({ phase: "Sliding temporal decoding", completed: decodedGroups, total: windowCount });
       if (decodedGroups % 8 === 0) await yieldToBrowser();
     }
 
     onProgress?.({ phase: "Recovering chunks", completed: 1, total: 1 });
     return recoverDataChunks([...byChunk.values()]);
   } finally {
-    URL.revokeObjectURL(url);
+    input.dispose();
   }
 }
 
@@ -946,7 +1024,8 @@ export function encodeIndexPost(files: FileManifest[]): { canvas: HTMLCanvasElem
         chunkIndex: 0,
         totalChunks: 1,
         payloadLength: indexBytes.length,
-        chunkCrc: crc32(indexBytes)
+        chunkCrc: crc32(indexBytes),
+        chunkBindingCrc: boundChunkCrc(0, indexBytes)
       },
       indexBytes
     ),
@@ -993,14 +1072,55 @@ function readSymbolsFromImageData(imageData: Uint8ClampedArray) {
   return symbols;
 }
 
+const SYMBOL_DECODERS: Array<{
+  id: CodecFormatId;
+  payloadVersions: readonly number[];
+  decode: (symbols: number[]) => Uint8Array;
+}> = [
+  { id: "hamming74-v3", payloadVersions: [3], decode: hammingDecodeSymbols },
+  {
+    id: "spatial-majority-v2",
+    payloadVersions: [2],
+    decode: (symbols) => bitsToBytes(spatialMajoritySymbols(symbols), SPATIAL_RAW_CHUNK_BYTES)
+  },
+  {
+    id: "colorgrid6-block-v1-v2",
+    payloadVersions: [1, 2],
+    decode: (symbols) => bitsToBytes(symbols, LEGACY_RAW_CHUNK_BYTES)
+  },
+  { id: "colorgrid6-bigint-v1", payloadVersions: [1], decode: legacyBitsToBytes }
+];
+
 function decodeSymbols(symbols: number[]): DecodeResult {
-  const allBytes = bitsToBytes(symbols);
+  let lastError: unknown;
+  for (const codec of SYMBOL_DECODERS) {
+    try {
+      return decodeChunkBytes(codec.decode(symbols), codec.id, codec.payloadVersions);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Unknown video payload format.");
+}
+
+function decodeChunkBytes(
+  allBytes: Uint8Array,
+  codecId: CodecFormatId,
+  acceptedPayloadVersions: readonly number[]
+): DecodeResult {
+  const payloadVersion = allBytes[4];
+  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || !acceptedPayloadVersions.includes(payloadVersion)) {
+    throw new Error("Unknown video payload format.");
+  }
   const headerLength = readUint16(allBytes, 5);
+  if (headerLength <= 0 || headerLength > HEADER_BYTES - 7) throw new Error("Invalid video payload header.");
   const headerJson = decoder.decode(allBytes.slice(7, 7 + headerLength));
-  const header = JSON.parse(headerJson) as Header;
+  const header = normalizeHeader(JSON.parse(headerJson) as Header | CompactHeader);
   const payloadStart = HEADER_BYTES;
   const payload = allBytes.slice(payloadStart, payloadStart + header.payloadLength);
-  const crcOk = crc32(payload) === header.chunkCrc;
+  const crcOk = crc32(payload) === header.chunkCrc
+    && (header.chunkBindingCrc === undefined || boundChunkCrc(header.chunkIndex, payload) === header.chunkBindingCrc);
+  const parityMembers = expandParityMembers(header, allBytes.length - HEADER_BYTES);
 
   return {
     ok: crcOk,
@@ -1013,9 +1133,28 @@ function decodeSymbols(symbols: number[]): DecodeResult {
     totalChunks: header.totalChunks,
     payload,
     message: crcOk ? "decoded" : "decoded with checksum mismatch",
-    parityMemberIndexes: header.parityMemberIndexes,
-    parityMemberLengths: header.parityMemberLengths
+    codecId,
+    payloadVersion,
+    parityMemberIndexes: parityMembers.indexes,
+    parityMemberLengths: parityMembers.lengths,
+    parityRow: header.parityRow
   };
+}
+
+function expandParityMembers(header: Header, payloadCapacity: number) {
+  if (header.parityMemberIndexes?.length) {
+    return { indexes: header.parityMemberIndexes, lengths: header.parityMemberLengths ?? [] };
+  }
+  const count = header.parityMemberCount ?? 0;
+  const start = header.parityStartIndex ?? 0;
+  const indexes = Array.from({ length: count }, (_, index) => start + index);
+  const lengths = new Array<number>(count).fill(payloadCapacity);
+  if (count && header.parityLastMemberLength !== undefined) lengths[count - 1] = header.parityLastMemberLength;
+  return { indexes, lengths };
+}
+
+function decodedChunkKey(chunk: DecodeResult) {
+  return `${chunk.kind}:${chunk.chunkIndex}:${chunk.parityRow ?? 0}`;
 }
 
 function majoritySymbols(groups: number[][]) {
@@ -1039,7 +1178,7 @@ function majoritySymbols(groups: number[][]) {
   return symbols;
 }
 
-export async function reassemble(results: DecodeResult[]): Promise<{ blob: Blob; fileName: string; hashOk: boolean; hash: string }> {
+export async function reassemble(results: DecodeResult[]): Promise<{ blob: Blob; fileName: string; hashOk: boolean; hash: string; expectedHash: string }> {
   const chunks = recoverDataChunks(results);
   const totalSize = chunks[0]?.fileSize ?? 0;
   const out = new Uint8Array(totalSize);
@@ -1056,13 +1195,15 @@ export async function reassemble(results: DecodeResult[]): Promise<{ blob: Blob;
     blob: new Blob([out], { type: chunks[0]?.mimeType || "application/octet-stream" }),
     fileName: chunks[0]?.fileName || "download.bin",
     hashOk: !expectedHash || hash === expectedHash,
-    hash
+    hash,
+    expectedHash: expectedHash ?? ""
   };
 }
 
 export function recoverDataChunks(results: DecodeResult[]) {
   const dataByIndex = new Map<number, DecodeResult>();
   const parityChunks = results.filter((chunk) => chunk.ok && chunk.kind === "xor");
+  const rsChunks = results.filter((chunk) => chunk.ok && chunk.kind === "rs");
   for (const chunk of results) {
     if (chunk.ok && chunk.kind === "data") dataByIndex.set(chunk.chunkIndex, chunk);
   }
@@ -1085,7 +1226,7 @@ export function recoverDataChunks(results: DecodeResult[]) {
       }
 
       const memberOffset = indexes.indexOf(missingIndex);
-      const payload = restored.slice(0, lengths[memberOffset] ?? PAYLOAD_BYTES_PER_IMAGE);
+      const payload = restored.slice(0, lengths[memberOffset] ?? restored.length);
       dataByIndex.set(missingIndex, {
         ...parity,
         kind: "data",
@@ -1097,6 +1238,19 @@ export function recoverDataChunks(results: DecodeResult[]) {
       });
       madeProgress = true;
     }
+  }
+
+  const rsGroups = new Map<string, DecodeResult[]>();
+  for (const parity of rsChunks) {
+    const indexes = parity.parityMemberIndexes ?? [];
+    if (!indexes.length || parity.parityRow === undefined) continue;
+    const key = indexes.join(",");
+    const group = rsGroups.get(key) ?? [];
+    group.push(parity);
+    rsGroups.set(key, group);
+  }
+  for (const group of rsGroups.values()) {
+    recoverReedSolomonGroup(group, dataByIndex);
   }
 
   return [...dataByIndex.values()].sort((a, b) => a.chunkIndex - b.chunkIndex);
@@ -1157,6 +1311,141 @@ function xorPayloads(payloads: Uint8Array[]) {
   return out;
 }
 
+export function buildReedSolomonParity(payloads: Uint8Array[]) {
+  return Array.from({ length: VIDEO_PARITY_FRAMES_PER_GROUP }, (_, parityRow) => {
+    const out = new Uint8Array(PAYLOAD_BYTES_PER_IMAGE);
+    for (let member = 0; member < payloads.length; member++) {
+      const coefficient = reedSolomonCoefficient(parityRow, member);
+      const payload = payloads[member];
+      for (let index = 0; index < payload.length; index++) {
+        out[index] ^= gfMultiply(coefficient, payload[index]);
+      }
+    }
+    return out;
+  });
+}
+
+function recoverReedSolomonGroup(parityFrames: DecodeResult[], dataByIndex: Map<number, DecodeResult>) {
+  const reference = parityFrames[0];
+  const indexes = reference.parityMemberIndexes ?? [];
+  const lengths = reference.parityMemberLengths ?? [];
+  const missingIndexes = indexes.filter((index) => !dataByIndex.has(index));
+  if (!missingIndexes.length || missingIndexes.length > parityFrames.length) return;
+
+  const selectedFrames = [...parityFrames]
+    .sort((left, right) => (left.parityRow ?? 0) - (right.parityRow ?? 0))
+    .slice(0, missingIndexes.length);
+  const missingMembers = missingIndexes.map((index) => indexes.indexOf(index));
+  const matrix = selectedFrames.map((frame) =>
+    missingMembers.map((member) => reedSolomonCoefficient(frame.parityRow ?? 0, member))
+  );
+  const inverse = invertGaloisMatrix(matrix);
+  if (!inverse) return;
+
+  const parityPayloadBytes = Math.max(...selectedFrames.map((frame) => frame.payload.length));
+  const recovered = missingIndexes.map(() => new Uint8Array(parityPayloadBytes));
+  for (let byteIndex = 0; byteIndex < parityPayloadBytes; byteIndex++) {
+    const rightSide = selectedFrames.map((frame) => {
+      let value = frame.payload[byteIndex] ?? 0;
+      for (let member = 0; member < indexes.length; member++) {
+        const known = dataByIndex.get(indexes[member]);
+        if (!known) continue;
+        value ^= gfMultiply(reedSolomonCoefficient(frame.parityRow ?? 0, member), known.payload[byteIndex] ?? 0);
+      }
+      return value;
+    });
+    for (let missing = 0; missing < recovered.length; missing++) {
+      let value = 0;
+      for (let row = 0; row < rightSide.length; row++) {
+        value ^= gfMultiply(inverse[missing][row], rightSide[row]);
+      }
+      recovered[missing][byteIndex] = value;
+    }
+  }
+
+  for (let missing = 0; missing < missingIndexes.length; missing++) {
+    const member = missingMembers[missing];
+    dataByIndex.set(missingIndexes[missing], {
+      ...reference,
+      kind: "data",
+      chunkIndex: missingIndexes[missing],
+      payload: recovered[missing].slice(0, lengths[member] ?? recovered[missing].length),
+      message: "recovered from Reed-Solomon parity",
+      parityMemberIndexes: undefined,
+      parityMemberLengths: undefined,
+      parityRow: undefined
+    });
+  }
+}
+
+function reedSolomonCoefficient(parityRow: number, member: number) {
+  return gfInverse((member + 1) ^ (0x80 + parityRow));
+}
+
+function gfMultiply(left: number, right: number) {
+  return GF_MULTIPLICATION_TABLE[(left << 8) | right];
+}
+
+const GF_MULTIPLICATION_TABLE = buildGaloisMultiplicationTable();
+
+function buildGaloisMultiplicationTable() {
+  const table = new Uint8Array(256 * 256);
+  for (let left = 0; left < 256; left++) {
+    for (let right = 0; right < 256; right++) {
+      table[(left << 8) | right] = gfMultiplyRaw(left, right);
+    }
+  }
+  return table;
+}
+
+function gfMultiplyRaw(left: number, right: number) {
+  let a = left;
+  let b = right;
+  let product = 0;
+  while (b) {
+    if (b & 1) product ^= a;
+    const highBit = a & 0x80;
+    a = (a << 1) & 0xff;
+    if (highBit) a ^= 0x1d;
+    b >>>= 1;
+  }
+  return product;
+}
+
+function gfPower(value: number, exponent: number) {
+  let result = 1;
+  for (let index = 0; index < exponent; index++) result = gfMultiply(result, value);
+  return result;
+}
+
+function gfInverse(value: number) {
+  if (!value) throw new Error("Cannot invert zero in GF(256).");
+  return gfPower(value, 254);
+}
+
+function invertGaloisMatrix(input: number[][]) {
+  const size = input.length;
+  const matrix = input.map((row, index) => [
+    ...row,
+    ...Array.from({ length: size }, (_, column) => column === index ? 1 : 0)
+  ]);
+  for (let column = 0; column < size; column++) {
+    const pivot = matrix.findIndex((row, index) => index >= column && row[column] !== 0);
+    if (pivot < 0) return null;
+    [matrix[column], matrix[pivot]] = [matrix[pivot], matrix[column]];
+    const scale = gfInverse(matrix[column][column]);
+    for (let index = 0; index < size * 2; index++) matrix[column][index] = gfMultiply(matrix[column][index], scale);
+    for (let row = 0; row < size; row++) {
+      if (row === column || matrix[row][column] === 0) continue;
+      const factor = matrix[row][column];
+      for (let index = 0; index < size * 2; index++) {
+        matrix[row][index] ^= gfMultiply(factor, matrix[column][index]);
+      }
+    }
+  }
+  return matrix.map((row) => row.slice(size));
+}
+
 function padAudioPayload(payload: Uint8Array) {
   const out = new Uint8Array(AUDIO_PROBE_PAYLOAD_BYTES);
   out.set(payload.slice(0, AUDIO_PROBE_PAYLOAD_BYTES));
@@ -1166,7 +1455,7 @@ function padAudioPayload(payload: Uint8Array) {
 function maxDataChunksForTargetVideo(repeatFrames: number, targetSeconds = VIDEO_TARGET_SECONDS) {
   const maxTransmittedChunks = Math.floor((targetSeconds * VIDEO_FPS) / repeatFrames);
   let dataChunks = 0;
-  while (dataChunks + 1 + Math.ceil((dataChunks + 1) / VIDEO_PARITY_GROUP_SIZE) <= maxTransmittedChunks) {
+  while (transmittedFrameCountForDataChunks(dataChunks + 1) <= maxTransmittedChunks) {
     dataChunks++;
   }
   return Math.max(1, dataChunks);
@@ -1298,18 +1587,39 @@ function drawEncodedChunk(ctx: CanvasRenderingContext2D, header: Header, payload
   drawFrame(ctx);
 
   const packed = packChunk(header, payload);
-  const symbols = bytesToSymbols(packed);
-  let pointer = 0;
-  for (let row = 0; row < GRID_CELLS; row++) {
-    for (let col = 0; col < GRID_CELLS; col++) {
-      const symbol = symbols[pointer++] ?? 0;
-      const [r, g, b] = palette[symbol];
-      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-      ctx.fillRect(GRID_ORIGIN + col * CELL_SIZE, GRID_ORIGIN + row * CELL_SIZE, CELL_SIZE, CELL_SIZE);
-    }
-  }
+  const symbols = hammingEncodeBytes(packed);
+  drawSymbolGrid(ctx, symbols);
 
   drawCalibration(ctx);
+}
+
+let symbolGridCanvas: HTMLCanvasElement | null = null;
+
+function drawSymbolGrid(ctx: CanvasRenderingContext2D, symbols: number[]) {
+  if (!symbolGridCanvas) {
+    symbolGridCanvas = document.createElement("canvas");
+    symbolGridCanvas.width = GRID_CELLS;
+    symbolGridCanvas.height = GRID_CELLS;
+  }
+  const gridContext = requiredContext(symbolGridCanvas);
+  const image = gridContext.createImageData(GRID_CELLS, GRID_CELLS);
+  for (let index = 0; index < symbols.length; index++) {
+    const [r, g, b] = palette[symbols[index] ?? 0];
+    const pixel = index * 4;
+    image.data[pixel] = r;
+    image.data[pixel + 1] = g;
+    image.data[pixel + 2] = b;
+    image.data[pixel + 3] = 255;
+  }
+  gridContext.putImageData(image, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(
+    symbolGridCanvas,
+    GRID_ORIGIN,
+    GRID_ORIGIN,
+    GRID_CELLS * CELL_SIZE,
+    GRID_CELLS * CELL_SIZE
+  );
 }
 
 async function recordCanvasesAsMp4(
@@ -1324,8 +1634,8 @@ async function recordCanvasesAsMp4(
 
   const { BufferTarget, CanvasSource, Mp4OutputFormat, Output } = await import("mediabunny");
   const format = new Mp4OutputFormat({ fastStart: "in-memory" });
-  const videoCodec = await pickInstagramVideoCodec(format);
-  if (!videoCodec) {
+  const videoEncoder = await pickInstagramVideoEncoder(format);
+  if (!videoEncoder) {
     throw new Error("This browser cannot encode H.264 MP4 video. Try Safari or a current Chromium browser.");
   }
 
@@ -1339,8 +1649,10 @@ async function recordCanvasesAsMp4(
     target
   });
   const source = new CanvasSource(stage, {
-    codec: videoCodec,
-    bitrate: VIDEO_BITRATE
+    codec: videoEncoder.codec,
+    bitrate: VIDEO_BITRATE,
+    bitrateMode: videoEncoder.bitrateMode,
+    latencyMode: "realtime"
   });
   output.addVideoTrack(source, {
     frameRate: fps
@@ -1380,10 +1692,10 @@ async function recordChunkJobsAsMp4(
     throw new Error("No chunks to record.");
   }
 
-  const { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output } = await import("mediabunny");
+  const { BufferTarget, CanvasSource, Mp4OutputFormat, Output } = await import("mediabunny");
   const format = new Mp4OutputFormat({ fastStart: "in-memory" });
-  const videoCodec = await pickInstagramVideoCodec(format);
-  if (!videoCodec) {
+  const videoEncoder = await pickInstagramVideoEncoder(format);
+  if (!videoEncoder) {
     throw new Error("This browser cannot encode H.264 MP4 video. Try Safari or a current Chromium browser.");
   }
 
@@ -1397,27 +1709,24 @@ async function recordChunkJobsAsMp4(
     target
   });
   const source = new CanvasSource(stage, {
-    codec: videoCodec,
-    bitrate: VIDEO_BITRATE
+    codec: videoEncoder.codec,
+    bitrate: VIDEO_BITRATE,
+    bitrateMode: videoEncoder.bitrateMode,
+    latencyMode: "realtime"
   });
   output.addVideoTrack(source, {
     frameRate: fps
   });
-  const audioSource = audioPayloads.length
-    ? new AudioBufferSource({
-        codec: "aac",
-        bitrate: 128_000
-      })
-    : null;
-  if (audioSource) output.addAudioTrack(audioSource);
-
   await output.start();
   const chunkDuration = repeatFrames / fps;
-  const audioSamples = audioPayloads.length ? synthesizeDtmfProbePackets(audioPayloads) : null;
-  const audioDurationSeconds = audioSamples ? audioSamples.length / AUDIO_PROBE_SAMPLE_RATE : 0;
+  const audioDurationSeconds = audioPayloads.reduce(
+    (sum, payload) => sum + audioProbeDurationForByteLength(payload.length),
+    0
+  );
   const visualFrames = jobs.length * repeatFrames;
   const visualDurationSeconds = visualFrames / fps;
-  const totalAdds = jobs.length + (audioDurationSeconds > visualDurationSeconds ? 1 : 0);
+  const targetDurationSeconds = Math.max(visualDurationSeconds, audioDurationSeconds, INSTAGRAM_MIN_VIDEO_SECONDS);
+  const totalAdds = jobs.length + (targetDurationSeconds > visualDurationSeconds ? 1 : 0);
   let completedAdds = 0;
   let currentTime = 0;
   onProgress?.({ phase: "Encoding MP4 chunks", completed: 0, total: totalAdds });
@@ -1429,25 +1738,13 @@ async function recordChunkJobsAsMp4(
     onProgress?.({ phase: "Encoding MP4 chunks", completed: completedAdds, total: totalAdds });
     await yieldToBrowser();
   }
-  if (audioDurationSeconds > currentTime) {
-    await source.add(currentTime, audioDurationSeconds - currentTime, { keyFrame: true });
-    currentTime = audioDurationSeconds;
+  if (targetDurationSeconds > currentTime) {
+    await source.add(currentTime, targetDurationSeconds - currentTime, { keyFrame: true });
+    currentTime = targetDurationSeconds;
     completedAdds++;
     onProgress?.({ phase: "Encoding MP4 chunks", completed: completedAdds, total: totalAdds });
   }
   source.close();
-  if (audioSource && audioSamples) {
-    const audioSampleCount = Math.ceil(currentTime * AUDIO_PROBE_SAMPLE_RATE);
-    const audioContext = new AudioContext({ sampleRate: AUDIO_PROBE_SAMPLE_RATE });
-    try {
-      const audioBuffer = audioContext.createBuffer(1, audioSampleCount, AUDIO_PROBE_SAMPLE_RATE);
-      audioBuffer.copyToChannel(audioSamples.slice(0, audioSampleCount), 0);
-      await audioSource.add(audioBuffer);
-      audioSource.close();
-    } finally {
-      await audioContext.close();
-    }
-  }
   onProgress?.({ phase: "Finalizing MP4", completed: totalAdds, total: totalAdds });
   await output.finalize();
 
@@ -1599,14 +1896,24 @@ function yieldToBrowser() {
   return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
-async function pickInstagramVideoCodec(format: { getSupportedVideoCodecs: () => string[] }) {
-  const { getFirstEncodableVideoCodec } = await import("mediabunny");
+async function pickInstagramVideoEncoder(format: { getSupportedVideoCodecs: () => string[] }) {
+  const { canEncodeVideo, getFirstEncodableVideoCodec } = await import("mediabunny");
   const codecs = format.getSupportedVideoCodecs().filter((codec) => codec === "avc");
-  return getFirstEncodableVideoCodec(codecs, {
+  const codec = await getFirstEncodableVideoCodec(codecs, {
     width: CANVAS_SIZE,
     height: CANVAS_SIZE,
     bitrate: VIDEO_BITRATE
   });
+  if (!codec) return null;
+
+  const supportsConstantBitrate = await canEncodeVideo(codec, {
+    width: CANVAS_SIZE,
+    height: CANVAS_SIZE,
+    bitrate: VIDEO_BITRATE,
+    bitrateMode: "constant",
+    latencyMode: "realtime"
+  });
+  return { codec, bitrateMode: supportsConstantBitrate ? "constant" as const : "variable" as const };
 }
 
 function waitForVideoMetadata(video: HTMLVideoElement) {
@@ -1696,7 +2003,10 @@ function seekVideo(video: HTMLVideoElement, time: number) {
 }
 
 function packChunk(header: Header, payload: Uint8Array) {
-  const headerJson = encoder.encode(JSON.stringify(header));
+  const legacyHeaderJson = encoder.encode(JSON.stringify(header));
+  const headerJson = legacyHeaderJson.length <= HEADER_BYTES - 7
+    ? legacyHeaderJson
+    : encoder.encode(JSON.stringify(compactHeader(header)));
   if (headerJson.length > HEADER_BYTES - 7) {
     throw new Error("Header is too large for this codec. Use a shorter file name.");
   }
@@ -1709,28 +2019,120 @@ function packChunk(header: Header, payload: Uint8Array) {
   return out;
 }
 
+function compactHeader(header: Header): CompactHeader {
+  return {
+    v: 2,
+    k: header.kind === "xor" ? "x" : header.kind === "rs" ? "r" : "d",
+    n: header.fileName,
+    m: header.mimeType,
+    s: header.fileSize,
+    h: header.fileHash,
+    i: header.chunkIndex,
+    t: header.totalChunks,
+    l: header.payloadLength,
+    c: header.chunkCrc,
+    d: header.chunkBindingCrc,
+    a: header.parityMemberIndexes,
+    b: header.parityMemberLengths,
+    p: header.parityStartIndex,
+    q: header.parityMemberCount,
+    r: header.parityLastMemberLength,
+    u: header.parityRow
+  };
+}
+
+function normalizeHeader(header: Header | CompactHeader): Header {
+  if (!("v" in header)) return header;
+  return {
+    kind: header.k === "x" ? "xor" : header.k === "r" ? "rs" : "data",
+    fileName: header.n,
+    mimeType: header.m,
+    fileSize: header.s,
+    fileHash: header.h,
+    chunkIndex: header.i,
+    totalChunks: header.t,
+    payloadLength: header.l,
+    chunkCrc: header.c,
+    chunkBindingCrc: header.d,
+    parityMemberIndexes: header.a,
+    parityMemberLengths: header.b,
+    parityStartIndex: header.p,
+    parityMemberCount: header.q,
+    parityLastMemberLength: header.r,
+    parityRow: header.u
+  };
+}
+
 function bytesToSymbols(bytes: Uint8Array) {
-  let value = 0n;
-  for (const byte of bytes) {
-    value = (value << 8n) | BigInt(byte);
-  }
-  const symbols = new Array<number>(SYMBOL_COUNT).fill(0);
+  const symbols = new Array<number>(Math.ceil(bytes.length / SYMBOL_BLOCK_BYTES) * SYMBOL_BLOCK_SIZE).fill(0);
   const radix = BigInt(SYMBOL_RADIX);
-  for (let i = symbols.length - 1; i >= 0; i--) {
-    symbols[i] = Number(value % radix);
-    value /= radix;
+  const blockCount = Math.ceil(bytes.length / SYMBOL_BLOCK_BYTES);
+  for (let block = 0; block < blockCount; block++) {
+    let value = 0n;
+    const byteStart = block * SYMBOL_BLOCK_BYTES;
+    for (let offset = 0; offset < SYMBOL_BLOCK_BYTES; offset++) {
+      value = (value << 8n) | BigInt(bytes[byteStart + offset] ?? 0);
+    }
+    const symbolStart = block * SYMBOL_BLOCK_SIZE;
+    for (let offset = SYMBOL_BLOCK_SIZE - 1; offset >= 0; offset--) {
+      symbols[symbolStart + offset] = Number(value % radix);
+      value /= radix;
+    }
   }
-  if (value !== 0n) throw new Error("Payload does not fit in the symbol grid.");
   return symbols;
 }
 
-function bitsToBytes(symbols: number[]) {
+function spatiallyRepeatSymbols(symbols: number[]) {
+  const physical = new Array<number>(SYMBOL_COUNT).fill(0);
+  for (let index = 0; index < SPATIAL_SYMBOL_COUNT; index++) {
+    const symbol = symbols[index] ?? 0;
+    physical[index] = symbol;
+    physical[index + SPATIAL_SYMBOL_COUNT] = symbol;
+    physical[index + SPATIAL_SYMBOL_COUNT * 2] = symbol;
+  }
+  return physical;
+}
+
+function spatialMajoritySymbols(symbols: number[]) {
+  const logical = new Array<number>(SPATIAL_SYMBOL_COUNT).fill(0);
+  for (let index = 0; index < SPATIAL_SYMBOL_COUNT; index++) {
+    const counts = new Array<number>(SYMBOL_RADIX).fill(0);
+    counts[symbols[index] ?? 0]++;
+    counts[symbols[index + SPATIAL_SYMBOL_COUNT] ?? 0]++;
+    counts[symbols[index + SPATIAL_SYMBOL_COUNT * 2] ?? 0]++;
+    let best = 0;
+    for (let symbol = 1; symbol < counts.length; symbol++) {
+      if (counts[symbol] > counts[best]) best = symbol;
+    }
+    logical[index] = best;
+  }
+  return logical;
+}
+
+function bitsToBytes(symbols: number[], byteLength = RAW_CHUNK_BYTES) {
+  const radix = BigInt(SYMBOL_RADIX);
+  const bytes = new Uint8Array(byteLength);
+  const blockCount = Math.min(Math.floor(symbols.length / SYMBOL_BLOCK_SIZE), Math.ceil(byteLength / SYMBOL_BLOCK_BYTES));
+  for (let block = 0; block < blockCount; block++) {
+    let value = 0n;
+    const symbolStart = block * SYMBOL_BLOCK_SIZE;
+    for (let offset = 0; offset < SYMBOL_BLOCK_SIZE; offset++) {
+      value = value * radix + BigInt(symbols[symbolStart + offset] ?? 0);
+    }
+    const byteStart = block * SYMBOL_BLOCK_BYTES;
+    for (let offset = SYMBOL_BLOCK_BYTES - 1; offset >= 0; offset--) {
+      if (byteStart + offset < bytes.length) bytes[byteStart + offset] = Number(value & 255n);
+      value >>= 8n;
+    }
+  }
+  return bytes;
+}
+
+function legacyBitsToBytes(symbols: number[]) {
   let value = 0n;
   const radix = BigInt(SYMBOL_RADIX);
-  for (const symbol of symbols) {
-    value = value * radix + BigInt(symbol);
-  }
-  const bytes = new Uint8Array(RAW_CHUNK_BYTES);
+  for (const symbol of symbols) value = value * radix + BigInt(symbol);
+  const bytes = new Uint8Array(Math.floor((SYMBOL_COUNT * Math.log2(SYMBOL_RADIX)) / 8));
   for (let i = bytes.length - 1; i >= 0; i--) {
     bytes[i] = Number(value & 255n);
     value >>= 8n;
@@ -1765,12 +2167,12 @@ function drawCalibration(ctx: CanvasRenderingContext2D) {
   for (let i = 0; i < palette.length; i++) {
     const [r, g, b] = palette[i];
     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-    ctx.fillRect(242 + i * 48, 21, 36, 36);
+    ctx.fillRect(242 + i * 48, 15, 24, 24);
   }
 }
 
 function readCalibrationSwatches(imageData: Uint8ClampedArray) {
-  return palette.map((_, i) => sampleAverageRgb(imageData, 242 + i * 48 + 18, 21 + 18, 8));
+  return palette.map((_, i) => sampleAverageRgb(imageData, 242 + i * 48 + 12, 15 + 12, 6));
 }
 
 function sampleRgb(imageData: Uint8ClampedArray, x: number, y: number) {
@@ -1836,7 +2238,7 @@ function colorDistance(a: number[], b: number[]) {
 }
 
 function requiredContext(canvas: HTMLCanvasElement) {
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const ctx = canvas.getContext("2d", { willReadFrequently: true, colorSpace: "srgb" });
   if (!ctx) throw new Error("2D canvas is unavailable.");
   return ctx;
 }
@@ -1850,11 +2252,6 @@ function readUint16(bytes: Uint8Array, offset: number) {
   return (bytes[offset] << 8) | bytes[offset + 1];
 }
 
-async function sha256Hex(bytes: Uint8Array) {
-  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 
 function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number) {
   return new Promise<Blob>((resolve, reject) => {
@@ -1871,4 +2268,64 @@ function crc32(bytes: Uint8Array) {
     }
   }
   return ~crc >>> 0;
+}
+
+function boundChunkCrc(chunkIndex: number, payload: Uint8Array) {
+  const bytes = new Uint8Array(payload.length + 4);
+  bytes[0] = chunkIndex >>> 24;
+  bytes[1] = chunkIndex >>> 16;
+  bytes[2] = chunkIndex >>> 8;
+  bytes[3] = chunkIndex;
+  bytes.set(payload, 4);
+  return crc32(bytes);
+}
+
+function hammingEncodeBytes(bytes: Uint8Array) {
+  const dataSymbols: number[] = [];
+  for (const byte of bytes) {
+    dataSymbols.push((byte >> 6) & 3, (byte >> 4) & 3, (byte >> 2) & 3, byte & 3);
+  }
+  const encoded = new Array<number>(SYMBOL_COUNT).fill(0);
+  let output = 0;
+  for (let offset = 0; offset < dataSymbols.length; offset += HAMMING_DATA_SYMBOLS) {
+    const data = [0, 1, 2, 3].map((index) => dataSymbols[offset + index] ?? 0);
+    const code = new Array<number>(HAMMING_CODE_SYMBOLS).fill(0);
+    for (let bit = 0; bit < 2; bit++) {
+      const d = data.map((symbol) => (symbol >> bit) & 1);
+      const plane = [d[0] ^ d[1] ^ d[3], d[0] ^ d[2] ^ d[3], d[0], d[1] ^ d[2] ^ d[3], d[1], d[2], d[3]];
+      for (let index = 0; index < HAMMING_CODE_SYMBOLS; index++) code[index] |= plane[index] << bit;
+    }
+    for (const symbol of code) encoded[output++] = symbol;
+  }
+  return encoded;
+}
+
+function hammingDecodeSymbols(symbols: number[]) {
+  const dataSymbols: number[] = [];
+  const groupCount = Math.floor(HAMMING_SOURCE_SYMBOL_COUNT / HAMMING_DATA_SYMBOLS);
+  for (let group = 0; group < groupCount; group++) {
+    const code = symbols.slice(group * HAMMING_CODE_SYMBOLS, group * HAMMING_CODE_SYMBOLS + HAMMING_CODE_SYMBOLS);
+    const data = [0, 0, 0, 0];
+    for (let bit = 0; bit < 2; bit++) {
+      const plane = code.map((symbol) => (symbol >> bit) & 1);
+      const syndrome =
+        (plane[0] ^ plane[2] ^ plane[4] ^ plane[6]) |
+        ((plane[1] ^ plane[2] ^ plane[5] ^ plane[6]) << 1) |
+        ((plane[3] ^ plane[4] ^ plane[5] ^ plane[6]) << 2);
+      if (syndrome > 0 && syndrome <= HAMMING_CODE_SYMBOLS) plane[syndrome - 1] ^= 1;
+      const decoded = [plane[2], plane[4], plane[5], plane[6]];
+      for (let index = 0; index < data.length; index++) data[index] |= decoded[index] << bit;
+    }
+    dataSymbols.push(...data);
+  }
+  const bytes = new Uint8Array(RAW_CHUNK_BYTES);
+  for (let index = 0; index < bytes.length; index++) {
+    const offset = index * 4;
+    bytes[index] =
+      ((dataSymbols[offset] ?? 0) << 6) |
+      ((dataSymbols[offset + 1] ?? 0) << 4) |
+      ((dataSymbols[offset + 2] ?? 0) << 2) |
+      (dataSymbols[offset + 3] ?? 0);
+  }
+  return bytes;
 }

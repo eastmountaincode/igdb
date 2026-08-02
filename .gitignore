@@ -41,3 +41,9 @@ pnpm-debug.log*
 .idea/
 *.swp
 .turbo/
+.instagram-browser-profile/
+.instagram-evidence/
+.instagram-uploads/
+.instagram-media-index.json
+.instagram-publication-status.json
+.recovered-downloads/

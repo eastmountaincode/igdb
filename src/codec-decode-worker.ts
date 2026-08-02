@@ -1,6 +1,15 @@
 export {};
 
-type ChunkKind = "data" | "xor";
+import type { CodecFormatId } from "./codec-registry";
+
+const MAGIC = [70, 84, 73, 71];
+const SYMBOL_BLOCK_BYTES = 8;
+const SYMBOL_BLOCK_SIZE = 25;
+const SPATIAL_SYMBOL_COPIES = 3;
+const HAMMING_DATA_SYMBOLS = 4;
+const HAMMING_CODE_SYMBOLS = 7;
+
+type ChunkKind = "data" | "xor" | "rs";
 
 type Header = {
   kind?: ChunkKind;
@@ -12,8 +21,33 @@ type Header = {
   totalChunks: number;
   payloadLength: number;
   chunkCrc: number;
+  chunkBindingCrc?: number;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
+  parityStartIndex?: number;
+  parityMemberCount?: number;
+  parityLastMemberLength?: number;
+  parityRow?: number;
+};
+
+type CompactHeader = {
+  v: 2;
+  k: "d" | "x" | "r";
+  n: string;
+  m: string;
+  s: number;
+  h: string;
+  i: number;
+  t: number;
+  l: number;
+  c: number;
+  d?: number;
+  a?: number[];
+  b?: number[];
+  p?: number;
+  q?: number;
+  r?: number;
+  u?: number;
 };
 
 type WorkerCodecProfile = {
@@ -45,8 +79,11 @@ type DecodeResult = {
   totalChunks: number;
   payload: ArrayBuffer;
   message: string;
+  codecId: CodecFormatId;
+  payloadVersion: number;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
+  parityRow?: number;
 };
 
 const decoder = new TextDecoder();
@@ -76,14 +113,106 @@ function decodeImageData(profile: WorkerCodecProfile, imageData: Uint8ClampedArr
     }
   }
 
-  const allBytes = bitsToBytes(profile, symbols);
+  const spatialSymbolCount = Math.floor(profile.symbolCount / SPATIAL_SYMBOL_COPIES);
+  const spatialRawChunkBytes = Math.floor(spatialSymbolCount / SYMBOL_BLOCK_SIZE) * SYMBOL_BLOCK_BYTES;
+  const legacyRawChunkBytes = Math.floor(profile.symbolCount / SYMBOL_BLOCK_SIZE) * SYMBOL_BLOCK_BYTES;
+  const decoders: Array<{
+    id: CodecFormatId;
+    payloadVersions: readonly number[];
+    decode: () => Uint8Array;
+  }> = [
+    { id: "hamming74-v3", payloadVersions: [3], decode: () => hammingDecodeSymbols(profile, symbols) },
+    {
+      id: "spatial-majority-v2",
+      payloadVersions: [2],
+      decode: () => bitsToBytes(profile, spatialMajoritySymbols(profile, symbols), spatialRawChunkBytes)
+    },
+    {
+      id: "colorgrid6-block-v1-v2",
+      payloadVersions: [1, 2],
+      decode: () => bitsToBytes(profile, symbols, legacyRawChunkBytes)
+    },
+    { id: "colorgrid6-bigint-v1", payloadVersions: [1], decode: () => legacyBitsToBytes(profile, symbols) }
+  ];
+  let lastError: unknown;
+  for (const codec of decoders) {
+    try {
+      return decodeChunkBytes(profile, codec.decode(), codec.id, codec.payloadVersions);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Unknown video payload format.");
+}
+
+function hammingDecodeSymbols(profile: WorkerCodecProfile, symbols: number[]) {
+  const sourceSymbolCount = Math.floor(profile.symbolCount / HAMMING_CODE_SYMBOLS) * HAMMING_DATA_SYMBOLS;
+  const dataSymbols: number[] = [];
+  const groupCount = Math.floor(sourceSymbolCount / HAMMING_DATA_SYMBOLS);
+  for (let group = 0; group < groupCount; group++) {
+    const code = symbols.slice(group * HAMMING_CODE_SYMBOLS, group * HAMMING_CODE_SYMBOLS + HAMMING_CODE_SYMBOLS);
+    const data = [0, 0, 0, 0];
+    for (let bit = 0; bit < 2; bit++) {
+      const plane = code.map((symbol) => (symbol >> bit) & 1);
+      const syndrome =
+        (plane[0] ^ plane[2] ^ plane[4] ^ plane[6]) |
+        ((plane[1] ^ plane[2] ^ plane[5] ^ plane[6]) << 1) |
+        ((plane[3] ^ plane[4] ^ plane[5] ^ plane[6]) << 2);
+      if (syndrome > 0 && syndrome <= HAMMING_CODE_SYMBOLS) plane[syndrome - 1] ^= 1;
+      const decoded = [plane[2], plane[4], plane[5], plane[6]];
+      for (let index = 0; index < data.length; index++) data[index] |= decoded[index] << bit;
+    }
+    dataSymbols.push(...data);
+  }
+  const bytes = new Uint8Array(profile.rawChunkBytes);
+  for (let index = 0; index < bytes.length; index++) {
+    const offset = index * 4;
+    bytes[index] =
+      ((dataSymbols[offset] ?? 0) << 6) |
+      ((dataSymbols[offset + 1] ?? 0) << 4) |
+      ((dataSymbols[offset + 2] ?? 0) << 2) |
+      (dataSymbols[offset + 3] ?? 0);
+  }
+  return bytes;
+}
+
+function spatialMajoritySymbols(profile: WorkerCodecProfile, symbols: number[]) {
+  const spatialSymbolCount = Math.floor(profile.symbolCount / SPATIAL_SYMBOL_COPIES);
+  const logical = new Array<number>(spatialSymbolCount).fill(0);
+  for (let index = 0; index < spatialSymbolCount; index++) {
+    const counts = new Array<number>(profile.symbolRadix).fill(0);
+    counts[symbols[index] ?? 0]++;
+    counts[symbols[index + spatialSymbolCount] ?? 0]++;
+    counts[symbols[index + spatialSymbolCount * 2] ?? 0]++;
+    let best = 0;
+    for (let symbol = 1; symbol < counts.length; symbol++) {
+      if (counts[symbol] > counts[best]) best = symbol;
+    }
+    logical[index] = best;
+  }
+  return logical;
+}
+
+function decodeChunkBytes(
+  profile: WorkerCodecProfile,
+  allBytes: Uint8Array,
+  codecId: CodecFormatId,
+  acceptedPayloadVersions: readonly number[]
+): DecodeResult {
+  const payloadVersion = allBytes[4];
+  if (!MAGIC.every((byte, index) => allBytes[index] === byte) || !acceptedPayloadVersions.includes(payloadVersion)) {
+    throw new Error("Unknown video payload format.");
+  }
   const headerLength = readUint16(allBytes, 5);
+  if (headerLength <= 0 || headerLength > profile.headerBytes - 7) throw new Error("Invalid video payload header.");
   const headerJson = decoder.decode(allBytes.slice(7, 7 + headerLength));
-  const header = JSON.parse(headerJson) as Header;
+  const header = normalizeHeader(JSON.parse(headerJson) as Header | CompactHeader);
   const payloadStart = profile.headerBytes;
   const payload = allBytes.slice(payloadStart, payloadStart + header.payloadLength);
-  const crcOk = crc32(payload) === header.chunkCrc;
+  const crcOk = crc32(payload) === header.chunkCrc
+    && (header.chunkBindingCrc === undefined || boundChunkCrc(header.chunkIndex, payload) === header.chunkBindingCrc);
   const payloadBuffer = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength) as ArrayBuffer;
+  const parityMembers = expandParityMembers(header, allBytes.length - profile.headerBytes);
 
   return {
     ok: crcOk,
@@ -96,18 +225,72 @@ function decodeImageData(profile: WorkerCodecProfile, imageData: Uint8ClampedArr
     totalChunks: header.totalChunks,
     payload: payloadBuffer,
     message: crcOk ? "decoded" : "decoded with checksum mismatch",
-    parityMemberIndexes: header.parityMemberIndexes,
-    parityMemberLengths: header.parityMemberLengths
+    codecId,
+    payloadVersion,
+    parityMemberIndexes: parityMembers.indexes,
+    parityMemberLengths: parityMembers.lengths,
+    parityRow: header.parityRow
   };
 }
 
-function bitsToBytes(profile: WorkerCodecProfile, symbols: number[]) {
+function normalizeHeader(header: Header | CompactHeader): Header {
+  if (!("v" in header)) return header;
+  return {
+    kind: header.k === "x" ? "xor" : header.k === "r" ? "rs" : "data",
+    fileName: header.n,
+    mimeType: header.m,
+    fileSize: header.s,
+    fileHash: header.h,
+    chunkIndex: header.i,
+    totalChunks: header.t,
+    payloadLength: header.l,
+    chunkCrc: header.c,
+    chunkBindingCrc: header.d,
+    parityMemberIndexes: header.a,
+    parityMemberLengths: header.b,
+    parityStartIndex: header.p,
+    parityMemberCount: header.q,
+    parityLastMemberLength: header.r,
+    parityRow: header.u
+  };
+}
+
+function expandParityMembers(header: Header, payloadCapacity: number) {
+  if (header.parityMemberIndexes?.length) {
+    return { indexes: header.parityMemberIndexes, lengths: header.parityMemberLengths ?? [] };
+  }
+  const count = header.parityMemberCount ?? 0;
+  const start = header.parityStartIndex ?? 0;
+  const indexes = Array.from({ length: count }, (_, index) => start + index);
+  const lengths = new Array<number>(count).fill(payloadCapacity);
+  if (count && header.parityLastMemberLength !== undefined) lengths[count - 1] = header.parityLastMemberLength;
+  return { indexes, lengths };
+}
+
+function bitsToBytes(profile: WorkerCodecProfile, symbols: number[], byteLength = profile.rawChunkBytes) {
+  const radix = BigInt(profile.symbolRadix);
+  const bytes = new Uint8Array(byteLength);
+  const blockCount = Math.min(Math.floor(symbols.length / SYMBOL_BLOCK_SIZE), Math.ceil(byteLength / SYMBOL_BLOCK_BYTES));
+  for (let block = 0; block < blockCount; block++) {
+    let value = 0n;
+    const symbolStart = block * SYMBOL_BLOCK_SIZE;
+    for (let offset = 0; offset < SYMBOL_BLOCK_SIZE; offset++) {
+      value = value * radix + BigInt(symbols[symbolStart + offset] ?? 0);
+    }
+    const byteStart = block * SYMBOL_BLOCK_BYTES;
+    for (let offset = SYMBOL_BLOCK_BYTES - 1; offset >= 0; offset--) {
+      if (byteStart + offset < bytes.length) bytes[byteStart + offset] = Number(value & 255n);
+      value >>= 8n;
+    }
+  }
+  return bytes;
+}
+
+function legacyBitsToBytes(profile: WorkerCodecProfile, symbols: number[]) {
   let value = 0n;
   const radix = BigInt(profile.symbolRadix);
-  for (const symbol of symbols) {
-    value = value * radix + BigInt(symbol);
-  }
-  const bytes = new Uint8Array(profile.rawChunkBytes);
+  for (const symbol of symbols) value = value * radix + BigInt(symbol);
+  const bytes = new Uint8Array(Math.floor((profile.symbolCount * Math.log2(profile.symbolRadix)) / 8));
   for (let i = bytes.length - 1; i >= 0; i--) {
     bytes[i] = Number(value & 255n);
     value >>= 8n;
@@ -116,7 +299,7 @@ function bitsToBytes(profile: WorkerCodecProfile, symbols: number[]) {
 }
 
 function readCalibrationSwatches(profile: WorkerCodecProfile, imageData: Uint8ClampedArray) {
-  return profile.palette.map((_, i) => sampleAverageRgb(profile, imageData, 242 + i * 48 + 18, 21 + 18, 8));
+  return profile.palette.map((_, i) => sampleAverageRgb(profile, imageData, 242 + i * 48 + 12, 15 + 12, 6));
 }
 
 function sampleRgb(profile: WorkerCodecProfile, imageData: Uint8ClampedArray, x: number, y: number) {
@@ -194,4 +377,14 @@ function crc32(bytes: Uint8Array) {
     }
   }
   return ~crc >>> 0;
+}
+
+function boundChunkCrc(chunkIndex: number, payload: Uint8Array) {
+  const bytes = new Uint8Array(payload.length + 4);
+  bytes[0] = chunkIndex >>> 24;
+  bytes[1] = chunkIndex >>> 16;
+  bytes[2] = chunkIndex >>> 8;
+  bytes[3] = chunkIndex;
+  bytes.set(payload, 4);
+  return crc32(bytes);
 }

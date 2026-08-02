@@ -2,8 +2,10 @@ export {};
 
 const MAGIC = [70, 84, 73, 71]; // FTIG
 const VERSION = 1;
+const SYMBOL_BLOCK_BYTES = 8;
+const SYMBOL_BLOCK_SIZE = 25;
 
-type ChunkKind = "data" | "xor";
+type ChunkKind = "data" | "xor" | "rs";
 
 type Header = {
   kind?: ChunkKind;
@@ -17,6 +19,29 @@ type Header = {
   chunkCrc: number;
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
+  parityStartIndex?: number;
+  parityMemberCount?: number;
+  parityLastMemberLength?: number;
+  parityRow?: number;
+};
+
+type CompactHeader = {
+  v: 2;
+  k: "d" | "x" | "r";
+  n: string;
+  m: string;
+  s: number;
+  h: string;
+  i: number;
+  t: number;
+  l: number;
+  c: number;
+  a?: number[];
+  b?: number[];
+  p?: number;
+  q?: number;
+  r?: number;
+  u?: number;
 };
 
 type WorkerCodecProfile = {
@@ -85,7 +110,10 @@ function encodeChunk(profile: WorkerCodecProfile, header: Header, payload: Uint8
 }
 
 function packChunk(profile: WorkerCodecProfile, header: Header, payload: Uint8Array) {
-  const headerJson = encoder.encode(JSON.stringify(header));
+  const legacyHeaderJson = encoder.encode(JSON.stringify(header));
+  const headerJson = legacyHeaderJson.length <= profile.headerBytes - 7
+    ? legacyHeaderJson
+    : encoder.encode(JSON.stringify(compactHeader(header)));
   if (headerJson.length > profile.headerBytes - 7) {
     throw new Error("Header is too large for this codec. Use a shorter file name.");
   }
@@ -98,18 +126,43 @@ function packChunk(profile: WorkerCodecProfile, header: Header, payload: Uint8Ar
   return out;
 }
 
+function compactHeader(header: Header): CompactHeader {
+  return {
+    v: 2,
+    k: header.kind === "xor" ? "x" : header.kind === "rs" ? "r" : "d",
+    n: header.fileName,
+    m: header.mimeType,
+    s: header.fileSize,
+    h: header.fileHash,
+    i: header.chunkIndex,
+    t: header.totalChunks,
+    l: header.payloadLength,
+    c: header.chunkCrc,
+    a: header.parityMemberIndexes,
+    b: header.parityMemberLengths,
+    p: header.parityStartIndex,
+    q: header.parityMemberCount,
+    r: header.parityLastMemberLength,
+    u: header.parityRow
+  };
+}
+
 function bytesToSymbols(profile: WorkerCodecProfile, bytes: Uint8Array) {
-  let value = 0n;
-  for (const byte of bytes) {
-    value = (value << 8n) | BigInt(byte);
-  }
   const symbols = new Array<number>(profile.symbolCount).fill(0);
   const radix = BigInt(profile.symbolRadix);
-  for (let i = symbols.length - 1; i >= 0; i--) {
-    symbols[i] = Number(value % radix);
-    value /= radix;
+  const blockCount = Math.ceil(bytes.length / SYMBOL_BLOCK_BYTES);
+  for (let block = 0; block < blockCount; block++) {
+    let value = 0n;
+    const byteStart = block * SYMBOL_BLOCK_BYTES;
+    for (let offset = 0; offset < SYMBOL_BLOCK_BYTES; offset++) {
+      value = (value << 8n) | BigInt(bytes[byteStart + offset] ?? 0);
+    }
+    const symbolStart = block * SYMBOL_BLOCK_SIZE;
+    for (let offset = SYMBOL_BLOCK_SIZE - 1; offset >= 0; offset--) {
+      symbols[symbolStart + offset] = Number(value % radix);
+      value /= radix;
+    }
   }
-  if (value !== 0n) throw new Error("Payload does not fit in the symbol grid.");
   return symbols;
 }
 
@@ -140,12 +193,12 @@ function drawCalibration(profile: WorkerCodecProfile, ctx: OffscreenCanvasRender
   for (let i = 0; i < profile.palette.length; i++) {
     const [r, g, b] = profile.palette[i];
     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-    ctx.fillRect(242 + i * 48, 21, 36, 36);
+    ctx.fillRect(242 + i * 48, 15, 24, 24);
   }
 }
 
 function requiredContext(canvas: OffscreenCanvas) {
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { colorSpace: "srgb" });
   if (!ctx) throw new Error("2D canvas is unavailable.");
   return ctx;
 }
