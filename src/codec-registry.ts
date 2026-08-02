@@ -1,11 +1,17 @@
-export const CODEC_REGISTRY_REVISION = "2026-07-hamming-v3";
+export const CODEC_REGISTRY_REVISION = "2026-08-hamming-v4-cross-video-repair";
 
 export const SUPPORTED_CODEC_FORMATS = [
+  {
+    id: "hamming74-v4",
+    label: "Hamming(7,4) four-symbol visual codec with cross-video repair",
+    payloadVersions: [4],
+    write: true
+  },
   {
     id: "hamming74-v3",
     label: "Hamming(7,4) four-symbol visual codec",
     payloadVersions: [3],
-    write: true
+    write: false
   },
   {
     id: "spatial-majority-v2",

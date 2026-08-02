@@ -5,6 +5,7 @@ import {
   decodeVideoFile,
   encodeFileAsVideos,
   formatBytes,
+  recoverDataChunks,
   reassemble,
   type DecodeResult,
   type DecodeVideoProgress,
@@ -210,7 +211,7 @@ export function InstagramPixelDbApp() {
     try {
       const videos = await encodeFileAsVideos(file, setEncodeProgress);
       if (videos.length >= 8) {
-        throw new Error("This file needs all eight carousel videos. Choose a file 14 MB or smaller so the display video fits first.");
+        throw new Error(`This file needs more than eight carousel videos. Choose a file ${activeFileLimitLabel} or smaller so the display and repair videos fit.`);
       }
       setEncodedVideos(videos);
       setEncodeProgress({ phase: videos.length > 1 ? "MP4 set ready" : "MP4 ready", completed: videos.length, total: videos.length });
@@ -300,7 +301,7 @@ export function InstagramPixelDbApp() {
     if (!videos.length) return;
 
     setIsDecodingVideo(true);
-    const recoveredByIndex = new Map<number, DecodeResult>();
+    const allDecodedChunks: DecodeResult[] = [];
     const messages: string[] = [];
     let mergedChunks: DecodeResult[] = [];
     let expectedFileIdentity: string | null = null;
@@ -327,26 +328,22 @@ export function InstagramPixelDbApp() {
           await new Promise((resolve) => window.setTimeout(resolve, 500));
           chunks = await decodeVideoFile(file, reportProgress);
         }
-        const recoveredChunks = chunks.filter((chunk) => chunk.ok && chunk.kind === "data");
-        const fileIdentity = recoveredChunks[0]
+        const identityChunk = chunks.find((chunk) => chunk.ok);
+        const fileIdentity = identityChunk
           ? [
-              recoveredChunks[0].fileHash,
-              recoveredChunks[0].fileSize,
-              recoveredChunks[0].totalChunks,
-              recoveredChunks[0].fileName
+              identityChunk.fileHash,
+              identityChunk.fileSize,
+              identityChunk.totalChunks,
+              identityChunk.fileName
             ].join(":")
           : null;
         if (fileIdentity && expectedFileIdentity && fileIdentity !== expectedFileIdentity) {
           throw new Error(`Carousel data video ${index + 1} belongs to a different encoded file.`);
         }
         if (fileIdentity && !expectedFileIdentity) expectedFileIdentity = fileIdentity;
-        for (const chunk of recoveredChunks) {
-          const existing = recoveredByIndex.get(chunk.chunkIndex);
-          if (!existing || !chunk.message.includes("audio side channel")) {
-            recoveredByIndex.set(chunk.chunkIndex, chunk);
-          }
-        }
-        mergedChunks = [...recoveredByIndex.values()].sort((left, right) => left.chunkIndex - right.chunkIndex);
+        allDecodedChunks.push(...chunks);
+        mergedChunks = recoverDataChunks(allDecodedChunks);
+        const recoveredChunks = chunks.filter((chunk) => chunk.ok && chunk.kind === "data");
         setDecodedChunks(mergedChunks);
         messages.push(
           `${file.name}: recovered ${chunks.length ? `${recoveredChunks.length}/${chunks[0].totalChunks}` : "0"} chunks; merged ${mergedChunks.length}.`
@@ -501,7 +498,7 @@ export function InstagramPixelDbApp() {
       const uploadId = firstUpload.uploadId;
       const uploadToken = firstUpload.uploadToken;
       setPublishMessage("Verifying the normalized videos before publishing...");
-      const normalizedChunks = new Map<number, DecodeResult>();
+      const normalizedParts: DecodeResult[] = [];
       for (let index = 1; index < uploadParts.length; index += 1) {
         const stagedName = `part-${String(index + 1).padStart(2, "0")}.mp4`;
         const stagedResponse = await fetch(
@@ -515,18 +512,12 @@ export function InstagramPixelDbApp() {
             `Verifying normalized video ${index} of ${uploadParts.length - 1}: ${progress.phase.toLowerCase()}...`
           );
         });
-        for (const chunk of chunks) {
-          if (!chunk.ok || chunk.kind !== "data") continue;
-          const existing = normalizedChunks.get(chunk.chunkIndex);
-          if (!existing || !chunk.message.includes("audio side channel")) {
-            normalizedChunks.set(chunk.chunkIndex, chunk);
-          }
-        }
+        normalizedParts.push(...chunks);
         setPublishParts((current) => current.map((part, partIndex) =>
           partIndex === index ? { ...part, status: "ready" } : part
         ));
       }
-      const verifiedChunks = [...normalizedChunks.values()].sort((left, right) => left.chunkIndex - right.chunkIndex);
+      const verifiedChunks = recoverDataChunks(normalizedParts);
       const expectedChunks = verifiedChunks[0]?.totalChunks ?? 0;
       if (!expectedChunks || verifiedChunks.length !== expectedChunks) {
         throw new Error(

@@ -9,7 +9,7 @@ const SPATIAL_SYMBOL_COPIES = 3;
 const HAMMING_DATA_SYMBOLS = 4;
 const HAMMING_CODE_SYMBOLS = 7;
 
-type ChunkKind = "data" | "xor" | "rs";
+type ChunkKind = "data" | "xor" | "rs" | "repair" | "repair-rs";
 
 type Header = {
   kind?: ChunkKind;
@@ -28,11 +28,12 @@ type Header = {
   parityMemberCount?: number;
   parityLastMemberLength?: number;
   parityRow?: number;
+  repairStride?: number;
 };
 
 type CompactHeader = {
   v: 2;
-  k: "d" | "x" | "r";
+  k: "d" | "x" | "r" | "p" | "q";
   n: string;
   m: string;
   s: number;
@@ -48,6 +49,7 @@ type CompactHeader = {
   q?: number;
   r?: number;
   u?: number;
+  w?: number;
 };
 
 type WorkerCodecProfile = {
@@ -84,6 +86,7 @@ type DecodeResult = {
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
   parityRow?: number;
+  repairStride?: number;
 };
 
 const decoder = new TextDecoder();
@@ -121,6 +124,7 @@ function decodeImageData(profile: WorkerCodecProfile, imageData: Uint8ClampedArr
     payloadVersions: readonly number[];
     decode: () => Uint8Array;
   }> = [
+    { id: "hamming74-v4", payloadVersions: [4], decode: () => hammingDecodeSymbols(profile, symbols) },
     { id: "hamming74-v3", payloadVersions: [3], decode: () => hammingDecodeSymbols(profile, symbols) },
     {
       id: "spatial-majority-v2",
@@ -229,14 +233,19 @@ function decodeChunkBytes(
     payloadVersion,
     parityMemberIndexes: parityMembers.indexes,
     parityMemberLengths: parityMembers.lengths,
-    parityRow: header.parityRow
+    parityRow: header.parityRow,
+    repairStride: header.repairStride
   };
 }
 
 function normalizeHeader(header: Header | CompactHeader): Header {
   if (!("v" in header)) return header;
   return {
-    kind: header.k === "x" ? "xor" : header.k === "r" ? "rs" : "data",
+    kind: header.k === "x" ? "xor"
+      : header.k === "r" ? "rs"
+      : header.k === "p" ? "repair"
+      : header.k === "q" ? "repair-rs"
+      : "data",
     fileName: header.n,
     mimeType: header.m,
     fileSize: header.s,
@@ -251,7 +260,8 @@ function normalizeHeader(header: Header | CompactHeader): Header {
     parityStartIndex: header.p,
     parityMemberCount: header.q,
     parityLastMemberLength: header.r,
-    parityRow: header.u
+    parityRow: header.u,
+    repairStride: header.w
   };
 }
 

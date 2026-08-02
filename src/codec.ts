@@ -76,6 +76,7 @@ export type DecodeResult = {
   parityMemberIndexes?: number[];
   parityMemberLengths?: number[];
   parityRow?: number;
+  repairStride?: number;
 };
 
 export type FileManifest = {
@@ -109,6 +110,7 @@ export type EncodedVideo = {
   dataChunkCount: number;
   audioPacketCount?: number;
   audioPayloadBytes?: number;
+  repairVideo?: boolean;
 };
 
 export type EncodeVideoProgress = {
@@ -140,11 +142,12 @@ type Header = {
   parityMemberCount?: number;
   parityLastMemberLength?: number;
   parityRow?: number;
+  repairStride?: number;
 };
 
 type CompactHeader = {
   v: 2;
-  k: "d" | "x" | "r";
+  k: "d" | "x" | "r" | "p" | "q";
   n: string;
   m: string;
   s: number;
@@ -160,9 +163,10 @@ type CompactHeader = {
   q?: number;
   r?: number;
   u?: number;
+  w?: number;
 };
 
-type ChunkKind = "data" | "xor" | "rs";
+type ChunkKind = "data" | "xor" | "rs" | "repair" | "repair-rs";
 type FrameSource = HTMLCanvasElement | ImageBitmap;
 
 type RenderChunkJob = {
@@ -231,7 +235,7 @@ type SerializedDecodeResult = Omit<DecodeResult, "payload"> & {
 };
 
 const MAGIC = [70, 84, 73, 71]; // FTIG
-const VERSION = 3;
+const VERSION = 4;
 const ENCODE_WORKER_COUNT = 2;
 const SEGMENT_ENCODE_CONCURRENCY = 2;
 const DECODE_WORKER_COUNT = 2;
@@ -389,8 +393,22 @@ async function encodeFileAsHybridVideos(
       ? [await encodeSegment(0, onProgress)]
       : await encodeSegmentsInParallel(segmentIndexes, Math.min(SEGMENT_ENCODE_CONCURRENCY, segments.length), encodeSegment, onProgress);
 
-  onProgress?.({ phase: "MP4 set ready", completed: videos.length, total: videos.length });
-  return videos;
+  const repairVideo = await encodeCrossVideoRepair({
+    bytes,
+    file,
+    fileHash,
+    totalChunks,
+    segments,
+    repeatFrames: VIDEO_REPEAT_FRAMES,
+    onProgress
+  });
+  const completeSet = [...videos, repairVideo].map((video) => ({
+    ...video,
+    totalSegments: videos.length + 1
+  }));
+
+  onProgress?.({ phase: "MP4 set ready", completed: completeSet.length, total: completeSet.length });
+  return completeSet;
 }
 
 async function encodeFileAsVideosWithRepeat(
@@ -725,6 +743,131 @@ async function encodeHybridVideoSegment({
   };
 }
 
+async function encodeCrossVideoRepair({
+  bytes,
+  file,
+  fileHash,
+  totalChunks,
+  segments,
+  repeatFrames,
+  onProgress
+}: {
+  bytes: Uint8Array;
+  file: File;
+  fileHash: string;
+  totalChunks: number;
+  segments: HybridSegmentPlan[];
+  repeatFrames: number;
+  onProgress?: (progress: EncodeVideoProgress) => void;
+}): Promise<EncodedVideo> {
+  const repairStride = Math.max(...segments.map((segment) => segment.visualChunks.length));
+  const repairJobs: RenderChunkJob[] = [];
+  const repairPayloads: Uint8Array[] = [];
+  const parityChunkCount = Math.ceil(repairStride / VIDEO_PARITY_GROUP_SIZE) * VIDEO_PARITY_FRAMES_PER_GROUP;
+  const totalWork = repairStride + parityChunkCount;
+  let completed = 0;
+
+  onProgress?.({ phase: "Preparing cross-video repair", completed, total: totalWork });
+  for (let offset = 0; offset < repairStride; offset++) {
+    const members = segments.flatMap((segment) => {
+      const chunk = segment.visualChunks[offset];
+      return chunk ? [chunk] : [];
+    });
+    const payloads = members.map((chunk) => bytes.slice(chunk.payloadStart, chunk.payloadStart + chunk.payloadLength));
+    const payload = xorPayloads(payloads);
+    repairPayloads.push(payload);
+    repairJobs.push({
+      order: repairJobs.length,
+      header: {
+        kind: "repair",
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        fileSize: bytes.length,
+        fileHash,
+        chunkIndex: offset,
+        totalChunks,
+        payloadLength: payload.length,
+        chunkCrc: crc32(payload),
+        chunkBindingCrc: boundChunkCrc(offset, payload),
+        parityMemberIndexes: members.map((chunk) => chunk.chunkIndex),
+        parityMemberLengths: members.map((chunk) => chunk.payloadLength),
+        repairStride
+      },
+      payload
+    });
+    completed++;
+    onProgress?.({ phase: "Preparing cross-video repair", completed, total: totalWork });
+    await yieldToBrowser();
+  }
+
+  let parityIndex = 0;
+  for (let groupStart = 0; groupStart < repairPayloads.length; groupStart += VIDEO_PARITY_GROUP_SIZE) {
+    const group = repairPayloads.slice(groupStart, groupStart + VIDEO_PARITY_GROUP_SIZE);
+    for (const [parityRow, payload] of buildReedSolomonParity(group).entries()) {
+      repairJobs.push({
+        order: repairJobs.length,
+        header: {
+          kind: "repair-rs",
+          fileName: file.name,
+          mimeType: file.type || "application/octet-stream",
+          fileSize: bytes.length,
+          fileHash,
+          chunkIndex: totalChunks + parityIndex,
+          totalChunks,
+          payloadLength: payload.length,
+          chunkCrc: crc32(payload),
+          chunkBindingCrc: boundChunkCrc(totalChunks + parityIndex, payload),
+          parityStartIndex: groupStart,
+          parityMemberCount: group.length,
+          parityLastMemberLength: group.at(-1)?.length,
+          parityRow,
+          repairStride
+        },
+        payload
+      });
+      parityIndex++;
+      completed++;
+      onProgress?.({ phase: "Preparing cross-video repair", completed, total: totalWork });
+      await yieldToBrowser();
+    }
+  }
+
+  const orderedJobs = interleaveParityGroups(repairJobs, repairStride);
+  const blob = await recordChunkJobsAsMp4(orderedJobs, repeatFrames, VIDEO_FPS, (progress) =>
+    onProgress?.({ ...progress, phase: `${progress.phase} repair video` })
+  );
+  return {
+    blob,
+    url: URL.createObjectURL(blob),
+    frameCount: orderedJobs.length * repeatFrames,
+    chunkCount: repairJobs.length,
+    payloadBytes: bytes.length,
+    fileBytes: bytes.length,
+    durationSeconds: (orderedJobs.length * repeatFrames) / VIDEO_FPS,
+    segmentIndex: segments.length,
+    totalSegments: segments.length + 1,
+    dataChunkStart: 0,
+    dataChunkEnd: totalChunks - 1,
+    dataChunkCount: repairStride,
+    audioPacketCount: 0,
+    audioPayloadBytes: 0,
+    repairVideo: true,
+    caption: [
+      "FLIPTABLE IGDB CROSS-VIDEO REPAIR v1",
+      `file=${file.name}`,
+      `repairSegments=${segments.length}`,
+      `repairStride=${repairStride}`,
+      `chunks=${repairJobs.length}`,
+      `fps=${VIDEO_FPS}`,
+      `repeat=${repeatFrames}`,
+      `parity=rs-${VIDEO_PARITY_GROUP_SIZE}+${VIDEO_PARITY_FRAMES_PER_GROUP}`,
+      "codec=hamming74-v4-cross-video-repair",
+      `size=${bytes.length}`,
+      `sha256=${fileHash}`
+    ].join("\n")
+  };
+}
+
 function interleaveParityGroups(renderJobs: RenderChunkJob[], dataChunkCount: number) {
   const dataJobs = renderJobs.slice(0, dataChunkCount);
   const parityJobs = renderJobs.slice(dataChunkCount);
@@ -803,6 +946,9 @@ async function decodeHybridVideoFile(
   onProgress?: (progress: DecodeVideoProgress) => void
 ): Promise<DecodeResult[]> {
   const visualChunks = await decodeVideoFileTemporalVote(file, VIDEO_REPEAT_FRAMES, onProgress);
+  if (visualChunks.some((chunk) => chunk.kind === "repair" || chunk.kind === "repair-rs")) {
+    return recoverRepairChunks(visualChunks);
+  }
   const template = visualChunks.find((chunk) => chunk.ok && chunk.kind === "data");
   if (!template) return visualChunks;
 
@@ -927,7 +1073,7 @@ async function decodeVideoFileSingleFrame(
       onProgress?.({ phase: "Decoding frames", completed: decodedFrames, total: queuedFrames || 1 });
       await Promise.all(pendingDecodes);
       onProgress?.({ phase: "Recovering chunks", completed: 1, total: 1 });
-      return recoverDataChunks([...byChunk.values()]);
+      return recoverDecodedVideoChunks([...byChunk.values()]);
     } finally {
       decodePool?.terminate();
     }
@@ -998,7 +1144,7 @@ export async function decodeVideoFileTemporalVote(
     }
 
     onProgress?.({ phase: "Recovering chunks", completed: 1, total: 1 });
-    return recoverDataChunks([...byChunk.values()]);
+    return recoverDecodedVideoChunks([...byChunk.values()]);
   } finally {
     input.dispose();
   }
@@ -1077,6 +1223,7 @@ const SYMBOL_DECODERS: Array<{
   payloadVersions: readonly number[];
   decode: (symbols: number[]) => Uint8Array;
 }> = [
+  { id: "hamming74-v4", payloadVersions: [4], decode: hammingDecodeSymbols },
   { id: "hamming74-v3", payloadVersions: [3], decode: hammingDecodeSymbols },
   {
     id: "spatial-majority-v2",
@@ -1137,7 +1284,8 @@ function decodeChunkBytes(
     payloadVersion,
     parityMemberIndexes: parityMembers.indexes,
     parityMemberLengths: parityMembers.lengths,
-    parityRow: header.parityRow
+    parityRow: header.parityRow,
+    repairStride: header.repairStride
   };
 }
 
@@ -1202,7 +1350,11 @@ export async function reassemble(results: DecodeResult[]): Promise<{ blob: Blob;
 
 export function recoverDataChunks(results: DecodeResult[]) {
   const dataByIndex = new Map<number, DecodeResult>();
-  const parityChunks = results.filter((chunk) => chunk.ok && chunk.kind === "xor");
+  const repairChunks = recoverRepairChunks(results);
+  const parityChunks = [
+    ...results.filter((chunk) => chunk.ok && chunk.kind === "xor"),
+    ...repairChunks
+  ];
   const rsChunks = results.filter((chunk) => chunk.ok && chunk.kind === "rs");
   for (const chunk of results) {
     if (chunk.ok && chunk.kind === "data") dataByIndex.set(chunk.chunkIndex, chunk);
@@ -1254,6 +1406,92 @@ export function recoverDataChunks(results: DecodeResult[]) {
   }
 
   return [...dataByIndex.values()].sort((a, b) => a.chunkIndex - b.chunkIndex);
+}
+
+function recoverDecodedVideoChunks(results: DecodeResult[]) {
+  return results.some((chunk) => chunk.kind === "repair" || chunk.kind === "repair-rs")
+    ? recoverRepairChunks(results)
+    : recoverDataChunks(results);
+}
+
+function recoverRepairChunks(results: DecodeResult[]) {
+  const repairByIndex = new Map<number, DecodeResult>();
+  for (const chunk of results) {
+    if (chunk.ok && chunk.kind === "repair") repairByIndex.set(chunk.chunkIndex, chunk);
+  }
+
+  const groups = new Map<string, DecodeResult[]>();
+  for (const parity of results.filter((chunk) => chunk.ok && chunk.kind === "repair-rs")) {
+    const indexes = parity.parityMemberIndexes ?? [];
+    if (!indexes.length || parity.parityRow === undefined) continue;
+    const key = indexes.join(",");
+    const group = groups.get(key) ?? [];
+    group.push(parity);
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) recoverRepairReedSolomonGroup(group, repairByIndex);
+  return [...repairByIndex.values()].sort((left, right) => left.chunkIndex - right.chunkIndex);
+}
+
+function recoverRepairReedSolomonGroup(parityFrames: DecodeResult[], repairByIndex: Map<number, DecodeResult>) {
+  const reference = parityFrames[0];
+  const indexes = reference.parityMemberIndexes ?? [];
+  const missingIndexes = indexes.filter((index) => !repairByIndex.has(index));
+  if (!missingIndexes.length || missingIndexes.length > parityFrames.length) return;
+
+  const selectedFrames = [...parityFrames]
+    .sort((left, right) => (left.parityRow ?? 0) - (right.parityRow ?? 0))
+    .slice(0, missingIndexes.length);
+  const missingMembers = missingIndexes.map((index) => indexes.indexOf(index));
+  const matrix = selectedFrames.map((frame) =>
+    missingMembers.map((member) => reedSolomonCoefficient(frame.parityRow ?? 0, member))
+  );
+  const inverse = invertGaloisMatrix(matrix);
+  if (!inverse) return;
+
+  const payloadBytes = Math.max(...selectedFrames.map((frame) => frame.payload.length));
+  const recovered = missingIndexes.map(() => new Uint8Array(payloadBytes));
+  for (let byteIndex = 0; byteIndex < payloadBytes; byteIndex++) {
+    const rightSide = selectedFrames.map((frame) => {
+      let value = frame.payload[byteIndex] ?? 0;
+      for (let member = 0; member < indexes.length; member++) {
+        const known = repairByIndex.get(indexes[member]);
+        if (!known) continue;
+        value ^= gfMultiply(reedSolomonCoefficient(frame.parityRow ?? 0, member), known.payload[byteIndex] ?? 0);
+      }
+      return value;
+    });
+    for (let missing = 0; missing < recovered.length; missing++) {
+      let value = 0;
+      for (let row = 0; row < rightSide.length; row++) {
+        value ^= gfMultiply(inverse[missing][row], rightSide[row]);
+      }
+      recovered[missing][byteIndex] = value;
+    }
+  }
+
+  const repairStride = reference.repairStride ?? 0;
+  for (let missing = 0; missing < missingIndexes.length; missing++) {
+    const repairIndex = missingIndexes[missing];
+    const members = repairMemberIndexes(repairIndex, repairStride, reference.totalChunks);
+    repairByIndex.set(repairIndex, {
+      ...reference,
+      kind: "repair",
+      chunkIndex: repairIndex,
+      payload: recovered[missing],
+      message: "recovered repair chunk from Reed-Solomon parity",
+      parityMemberIndexes: members,
+      parityMemberLengths: members.map((index) => Math.min(PAYLOAD_BYTES_PER_IMAGE, reference.fileSize - index * PAYLOAD_BYTES_PER_IMAGE)),
+      parityRow: undefined
+    });
+  }
+}
+
+function repairMemberIndexes(offset: number, stride: number, totalChunks: number) {
+  if (stride <= 0) return [];
+  const indexes: number[] = [];
+  for (let index = offset; index < totalChunks; index += stride) indexes.push(index);
+  return indexes;
 }
 
 export async function simulateInstagramRoundTrip(canvas: HTMLCanvasElement, quality: number): Promise<File> {
@@ -2022,7 +2260,11 @@ function packChunk(header: Header, payload: Uint8Array) {
 function compactHeader(header: Header): CompactHeader {
   return {
     v: 2,
-    k: header.kind === "xor" ? "x" : header.kind === "rs" ? "r" : "d",
+    k: header.kind === "xor" ? "x"
+      : header.kind === "rs" ? "r"
+      : header.kind === "repair" ? "p"
+      : header.kind === "repair-rs" ? "q"
+      : "d",
     n: header.fileName,
     m: header.mimeType,
     s: header.fileSize,
@@ -2037,14 +2279,19 @@ function compactHeader(header: Header): CompactHeader {
     p: header.parityStartIndex,
     q: header.parityMemberCount,
     r: header.parityLastMemberLength,
-    u: header.parityRow
+    u: header.parityRow,
+    w: header.repairStride
   };
 }
 
 function normalizeHeader(header: Header | CompactHeader): Header {
   if (!("v" in header)) return header;
   return {
-    kind: header.k === "x" ? "xor" : header.k === "r" ? "rs" : "data",
+    kind: header.k === "x" ? "xor"
+      : header.k === "r" ? "rs"
+      : header.k === "p" ? "repair"
+      : header.k === "q" ? "repair-rs"
+      : "data",
     fileName: header.n,
     mimeType: header.m,
     fileSize: header.s,
@@ -2059,7 +2306,8 @@ function normalizeHeader(header: Header | CompactHeader): Header {
     parityStartIndex: header.p,
     parityMemberCount: header.q,
     parityLastMemberLength: header.r,
-    parityRow: header.u
+    parityRow: header.u,
+    repairStride: header.w
   };
 }
 

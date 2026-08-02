@@ -1,11 +1,11 @@
 export {};
 
 const MAGIC = [70, 84, 73, 71]; // FTIG
-const VERSION = 1;
+const VERSION = 4;
 const SYMBOL_BLOCK_BYTES = 8;
 const SYMBOL_BLOCK_SIZE = 25;
 
-type ChunkKind = "data" | "xor" | "rs";
+type ChunkKind = "data" | "xor" | "rs" | "repair" | "repair-rs";
 
 type Header = {
   kind?: ChunkKind;
@@ -23,11 +23,12 @@ type Header = {
   parityMemberCount?: number;
   parityLastMemberLength?: number;
   parityRow?: number;
+  repairStride?: number;
 };
 
 type CompactHeader = {
   v: 2;
-  k: "d" | "x" | "r";
+  k: "d" | "x" | "r" | "p" | "q";
   n: string;
   m: string;
   s: number;
@@ -42,6 +43,7 @@ type CompactHeader = {
   q?: number;
   r?: number;
   u?: number;
+  w?: number;
 };
 
 type WorkerCodecProfile = {
@@ -129,7 +131,11 @@ function packChunk(profile: WorkerCodecProfile, header: Header, payload: Uint8Ar
 function compactHeader(header: Header): CompactHeader {
   return {
     v: 2,
-    k: header.kind === "xor" ? "x" : header.kind === "rs" ? "r" : "d",
+    k: header.kind === "xor" ? "x"
+      : header.kind === "rs" ? "r"
+      : header.kind === "repair" ? "p"
+      : header.kind === "repair-rs" ? "q"
+      : "d",
     n: header.fileName,
     m: header.mimeType,
     s: header.fileSize,
@@ -143,7 +149,8 @@ function compactHeader(header: Header): CompactHeader {
     p: header.parityStartIndex,
     q: header.parityMemberCount,
     r: header.parityLastMemberLength,
-    u: header.parityRow
+    u: header.parityRow,
+    w: header.repairStride
   };
 }
 
