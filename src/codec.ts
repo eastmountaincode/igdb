@@ -1073,7 +1073,7 @@ async function decodeVideoFileSingleFrame(
       onProgress?.({ phase: "Decoding frames", completed: decodedFrames, total: queuedFrames || 1 });
       await Promise.all(pendingDecodes);
       onProgress?.({ phase: "Recovering chunks", completed: 1, total: 1 });
-      return recoverDataChunks([...byChunk.values()]);
+      return recoverDecodedVideoChunks([...byChunk.values()]);
     } finally {
       decodePool?.terminate();
     }
@@ -1144,7 +1144,7 @@ export async function decodeVideoFileTemporalVote(
     }
 
     onProgress?.({ phase: "Recovering chunks", completed: 1, total: 1 });
-    return recoverDataChunks([...byChunk.values()]);
+    return recoverDecodedVideoChunks([...byChunk.values()]);
   } finally {
     input.dispose();
   }
@@ -1406,6 +1406,12 @@ export function recoverDataChunks(results: DecodeResult[]) {
   }
 
   return [...dataByIndex.values()].sort((a, b) => a.chunkIndex - b.chunkIndex);
+}
+
+function recoverDecodedVideoChunks(results: DecodeResult[]) {
+  return results.some((chunk) => chunk.kind === "repair" || chunk.kind === "repair-rs")
+    ? recoverRepairChunks(results)
+    : recoverDataChunks(results);
 }
 
 function recoverRepairChunks(results: DecodeResult[]) {
