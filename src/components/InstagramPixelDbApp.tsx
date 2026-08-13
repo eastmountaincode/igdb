@@ -20,6 +20,8 @@ import {
 } from "@/upload-limits";
 
 type ActiveTab = "about" | "read" | "share" | "write";
+type AuthMode = "login" | "register";
+type AuthUser = { id: string; email: string };
 type PublishPartStatus = {
   label: string;
   status: "waiting" | "uploading" | "processing" | "ready" | "failed";
@@ -64,6 +66,12 @@ export function InstagramPixelDbApp() {
   const [publishRequestId, setPublishRequestId] = useState("");
   const [publishParts, setPublishParts] = useState<PublishPartStatus[]>([]);
   const [publishQueuePosition, setPublishQueuePosition] = useState<number | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authMode, setAuthMode] = useState<AuthMode | null>(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
   const activeFileLimit = MAX_SOURCE_FILE_WITH_COVER_BYTES;
   const activeFileLimitLabel = MAX_SOURCE_FILE_WITH_COVER_LABEL;
   const fileTooLarge = Boolean(selectedFile && selectedFile.size > activeFileLimit);
@@ -76,6 +84,13 @@ export function InstagramPixelDbApp() {
       : encodedVideos.length === 0
         ? "generate-mp4"
         : "publish-instagram";
+
+  useEffect(() => {
+    void fetch("/api/auth", { headers: { "Accept": "application/json" }, cache: "no-store" })
+      .then((response) => response.json())
+      .then((result) => setAuthUser(result.user ?? null))
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -577,6 +592,35 @@ export function InstagramPixelDbApp() {
     }
   }
 
+  async function handleAuthentication(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!authMode || isAuthenticating) return;
+    setIsAuthenticating(true);
+    setAuthMessage("");
+    try {
+      const response = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ action: authMode, email: authEmail, password: authPassword })
+      });
+      const result = await readJsonResponse(response);
+      if (!response.ok || !result.user) throw new Error(result.error || "Authentication failed.");
+      setAuthUser(result.user as AuthUser);
+      setAuthMode(null);
+      setAuthEmail("");
+      setAuthPassword("");
+    } catch (error) {
+      setAuthMessage(error instanceof Error ? error.message : "Authentication failed.");
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }
+
+  async function handleSignOut() {
+    await fetch("/api/auth", { method: "DELETE", headers: { "Accept": "application/json" } });
+    setAuthUser(null);
+  }
+
   return (
     <div className="shell">
       <header className="site-header">
@@ -618,7 +662,51 @@ export function InstagramPixelDbApp() {
             About
           </button>
         </nav>
+        <div className="account-actions">
+          {authUser ? (
+            <>
+              <span title={authUser.email}>{authUser.email}</span>
+              <button type="button" onClick={handleSignOut}>Sign out</button>
+            </>
+          ) : (
+            <>
+              <button type="button" onClick={() => { setAuthMode("register"); setAuthMessage(""); }}>Create account</button>
+              <button type="button" onClick={() => { setAuthMode("login"); setAuthMessage(""); }}>Sign in</button>
+            </>
+          )}
+        </div>
       </header>
+
+      {authMode ? (
+        <div className="auth-dialog-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setAuthMode(null);
+        }}>
+          <section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+            <div className="auth-dialog-heading">
+              <strong id="auth-title">{authMode === "register" ? "Create account" : "Sign in"}</strong>
+              <button type="button" aria-label="Close" onClick={() => setAuthMode(null)}>×</button>
+            </div>
+            <form onSubmit={handleAuthentication}>
+              <label className="field-label" htmlFor="auth-email">
+                Email
+                <input id="auth-email" type="email" autoComplete="email" required maxLength={254} value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} />
+              </label>
+              <label className="field-label" htmlFor="auth-password">
+                Password
+                <input id="auth-password" type="password" autoComplete={authMode === "register" ? "new-password" : "current-password"} required minLength={10} maxLength={128} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} />
+              </label>
+              {authMode === "register" ? <p className="auth-help">Use at least 10 characters.</p> : null}
+              {authMessage ? <p className="file-error" role="alert">{authMessage}</p> : null}
+              <div className="button-row">
+                <button type="submit" disabled={isAuthenticating}>{isAuthenticating ? "working..." : authMode === "register" ? "Create account" : "Sign in"}</button>
+                <button type="button" onClick={() => { setAuthMode(authMode === "register" ? "login" : "register"); setAuthMessage(""); }}>
+                  {authMode === "register" ? "I already have an account" : "Create an account"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
 
       <main>
 
@@ -992,6 +1080,7 @@ async function readJsonResponse(response: Response) {
   }
   return response.json() as Promise<{
     error?: string;
+    user?: AuthUser;
     mediaId?: string;
     permalink?: string;
     parts?: number;

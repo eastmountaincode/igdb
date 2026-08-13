@@ -47,3 +47,6 @@ pnpm-debug.log*
 .instagram-media-index.json
 .instagram-publication-status.json
 .recovered-downloads/
+.igdb-users.json
+.igdb-users.lock
+.igdb-auth-secret

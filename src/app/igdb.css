@@ -446,6 +446,67 @@ pre {
   white-space: pre-wrap;
 }
 
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.75rem;
+  padding-bottom: 0.25rem;
+}
+
+.account-actions span {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-dialog-backdrop {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgb(255 255 255 / 85%);
+}
+
+.auth-dialog {
+  width: min(100%, 26rem);
+  border: 1px solid #000;
+  padding: 0.75rem;
+  background: #fff;
+}
+
+.auth-dialog-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px dotted #000;
+  padding-bottom: 0.4rem;
+}
+
+.auth-dialog-heading button {
+  min-width: 1.75rem;
+  padding: 0;
+}
+
+.auth-dialog form {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.auth-dialog .button-row {
+  margin-top: 0;
+}
+
+.auth-help {
+  color: #444;
+  font-size: 0.9rem;
+}
+
 @media (max-width: 50rem) {
   .site-title {
     margin-right: 0.5rem;
@@ -455,6 +516,14 @@ pre {
   .tabbar .about-tab {
     margin-right: 0;
     margin-left: 0;
+  }
+
+  .account-actions {
+    flex-basis: 100%;
+    justify-content: flex-end;
+    margin-left: 0;
+    border-top: 1px dotted #000;
+    padding-top: 0.35rem;
   }
 
   .read-layout,
