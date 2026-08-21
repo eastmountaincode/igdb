@@ -5,6 +5,7 @@ import {
   decodeVideoFile,
   encodeFileAsVideos,
   formatBytes,
+  hasAllDataChunks,
   recoverDataChunks,
   reassemble,
   type DecodeResult,
@@ -150,7 +151,7 @@ export function InstagramPixelDbApp() {
 
   const recoveredChunks = decodedChunks.filter((chunk) => chunk.ok && chunk.kind === "data").length;
   const expectedChunks = decodedChunks[0]?.totalChunks ?? 0;
-  const canAssemble = expectedChunks > 0 && recoveredChunks === expectedChunks;
+  const canAssemble = hasAllDataChunks(decodedChunks);
   const recoveredFileName = decodedChunks.find((chunk) => chunk.kind === "data" && chunk.fileName)?.fileName;
   const recoveredCodec = decodedChunks.find((chunk) => chunk.ok && chunk.kind === "data")?.codecId;
   const decodeLog = buildDecodeSummary(decodedChunks, decodeMessages);
@@ -372,7 +373,7 @@ export function InstagramPixelDbApp() {
       }
       setDecodeProgress({ phase: "Decode complete", completed: videos.length, total: videos.length });
       const totalChunks = mergedChunks[0]?.totalChunks ?? 0;
-      if (prepareDownloadWhenComplete && totalChunks > 0 && mergedChunks.length === totalChunks) {
+      if (prepareDownloadWhenComplete && hasAllDataChunks(mergedChunks)) {
         setVerificationStatus("verifying");
         const assembled = await reassemble(mergedChunks);
         if (!assembled.hashOk) {
@@ -534,7 +535,7 @@ export function InstagramPixelDbApp() {
       }
       const verifiedChunks = recoverDataChunks(normalizedParts);
       const expectedChunks = verifiedChunks[0]?.totalChunks ?? 0;
-      if (!expectedChunks || verifiedChunks.length !== expectedChunks) {
+      if (!hasAllDataChunks(verifiedChunks)) {
         throw new Error(
           `Upload stopped before Instagram: the normalized videos recovered only ${verifiedChunks.length}/${expectedChunks || "?"} chunks.`
         );

@@ -1,4 +1,4 @@
-export const CODEC_REGISTRY_REVISION = "2026-08-hamming-v4-cross-video-repair";
+export const CODEC_REGISTRY_REVISION = "2026-08-hamming-v4-repair-index-validation";
 
 export const SUPPORTED_CODEC_FORMATS = [
   {
