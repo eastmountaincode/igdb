@@ -43,10 +43,10 @@ record_error() {
   fi
   temporary=$(mktemp)
   jq --arg field "$error_field" --arg message "$message" --arg at "$at" --arg revision "$DECODER_REVISION" --arg codec "$codec_id" --argjson supported "$SUPPORTED_CODECS" \
-    '.[$field]={message:$message,attemptedAt:$at,decoderRevision:$revision,detectedCodec:$codec,supportedCodecs:$supported}' "$post_json" >"$temporary" && mv "$temporary" "$post_json"
+    '.[$field]={message:$message,attemptedAt:$at,decoderRevision:$revision,codec:$codec,supportedCodecs:$supported}' "$post_json" >"$temporary" && mv "$temporary" "$post_json"
   temporary=$(mktemp)
   jq --arg id "$media_id" --arg field "$error_field" --arg message "$message" --arg at "$at" --arg revision "$DECODER_REVISION" --arg codec "$codec_id" --argjson supported "$SUPPORTED_CODECS" \
-    '.posts[$id][$field]={message:$message,attemptedAt:$at,decoderRevision:$revision,detectedCodec:$codec,supportedCodecs:$supported}' "$MANIFEST" >"$temporary" && mv "$temporary" "$MANIFEST"
+    '.posts[$id][$field]={message:$message,attemptedAt:$at,decoderRevision:$revision,codec:$codec,supportedCodecs:$supported}' "$MANIFEST" >"$temporary" && mv "$temporary" "$MANIFEST"
   printf '%s\t%s\t%s\n' "$status_label" "$media_id" "$message"
 }
 
@@ -56,9 +56,15 @@ while IFS=$'\t' read -r media_id permalink relative_directory; do
   post_json="$directory/post.json"
   encoded_url=$(node -e 'const u=new URL(process.argv[1]); u.searchParams.set("read",process.argv[2]); process.stdout.write(u.href)' "$SITE" "$permalink")
   printf 'START\t%s\t%s\n' "$media_id" "$permalink"
-  agent-browser --session "$SESSION" open "$encoded_url" >/dev/null 2>&1 || continue
+  if ! agent-browser --session "$SESSION" open "$encoded_url" >/dev/null 2>&1; then
+    record_error "$media_id" "$post_json" "Browser could not open the production decoder." "unknown"
+    continue
+  fi
   agent-browser --session "$SESSION" wait 1000 >/dev/null 2>&1 || true
-  agent-browser --session "$SESSION" find role button click --name "read URL" >/dev/null 2>&1 || continue
+  if ! agent-browser --session "$SESSION" find role button click --name "read URL" >/dev/null 2>&1; then
+    record_error "$media_id" "$post_json" "Production decoder did not expose the read URL action." "unknown"
+    continue
+  fi
   body=""
   for _ in $(seq 1 720); do
     body=$(agent-browser --session "$SESSION" get text body 2>/dev/null || true)

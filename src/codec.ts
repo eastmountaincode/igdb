@@ -1328,6 +1328,10 @@ function majoritySymbols(groups: number[][]) {
 
 export async function reassemble(results: DecodeResult[]): Promise<{ blob: Blob; fileName: string; hashOk: boolean; hash: string; expectedHash: string }> {
   const chunks = recoverDataChunks(results);
+  if (!hasAllDataChunks(chunks)) {
+    const totalChunks = chunks[0]?.totalChunks ?? 0;
+    throw new Error(`Only ${chunks.length}/${totalChunks || "?"} chunks were recovered.`);
+  }
   const totalSize = chunks[0]?.fileSize ?? 0;
   const out = new Uint8Array(totalSize);
   let offset = 0;
@@ -1357,15 +1361,16 @@ export function recoverDataChunks(results: DecodeResult[]) {
   ];
   const rsChunks = results.filter((chunk) => chunk.ok && chunk.kind === "rs");
   for (const chunk of results) {
-    if (chunk.ok && chunk.kind === "data") dataByIndex.set(chunk.chunkIndex, chunk);
+    if (chunk.ok && chunk.kind === "data" && isValidDataChunkIndex(chunk.chunkIndex, chunk.totalChunks)) {
+      dataByIndex.set(chunk.chunkIndex, chunk);
+    }
   }
 
   let madeProgress = true;
   while (madeProgress) {
     madeProgress = false;
     for (const parity of parityChunks) {
-      const indexes = parity.parityMemberIndexes ?? [];
-      const lengths = parity.parityMemberLengths ?? [];
+      const { indexes, lengths } = validParityMembers(parity);
       const missing = indexes.filter((index) => !dataByIndex.has(index));
       if (missing.length !== 1) continue;
 
@@ -1394,11 +1399,11 @@ export function recoverDataChunks(results: DecodeResult[]) {
 
   const rsGroups = new Map<string, DecodeResult[]>();
   for (const parity of rsChunks) {
-    const indexes = parity.parityMemberIndexes ?? [];
+    const { indexes, lengths } = validParityMembers(parity);
     if (!indexes.length || parity.parityRow === undefined) continue;
     const key = indexes.join(",");
     const group = rsGroups.get(key) ?? [];
-    group.push(parity);
+    group.push({ ...parity, parityMemberIndexes: indexes, parityMemberLengths: lengths });
     rsGroups.set(key, group);
   }
   for (const group of rsGroups.values()) {
@@ -1406,6 +1411,36 @@ export function recoverDataChunks(results: DecodeResult[]) {
   }
 
   return [...dataByIndex.values()].sort((a, b) => a.chunkIndex - b.chunkIndex);
+}
+
+export function hasAllDataChunks(results: DecodeResult[]) {
+  const totalChunks = results.find((chunk) => chunk.ok && chunk.kind === "data")?.totalChunks ?? 0;
+  if (totalChunks <= 0) return false;
+  const indexes = new Set(
+    results
+      .filter((chunk) => chunk.ok && chunk.kind === "data" && chunk.totalChunks === totalChunks)
+      .map((chunk) => chunk.chunkIndex)
+      .filter((index) => isValidDataChunkIndex(index, totalChunks))
+  );
+  return indexes.size === totalChunks;
+}
+
+function isValidDataChunkIndex(index: number, totalChunks: number) {
+  return Number.isInteger(index) && Number.isInteger(totalChunks) && index >= 0 && index < totalChunks;
+}
+
+function validParityMembers(parity: DecodeResult) {
+  const sourceIndexes = parity.parityMemberIndexes ?? [];
+  const sourceLengths = parity.parityMemberLengths ?? [];
+  const indexes: number[] = [];
+  const lengths: number[] = [];
+  for (let member = 0; member < sourceIndexes.length; member++) {
+    const index = sourceIndexes[member];
+    if (!isValidDataChunkIndex(index, parity.totalChunks)) continue;
+    indexes.push(index);
+    lengths.push(sourceLengths[member] ?? parity.payload.length);
+  }
+  return { indexes, lengths };
 }
 
 function recoverDecodedVideoChunks(results: DecodeResult[]) {
