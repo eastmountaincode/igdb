@@ -663,19 +663,12 @@ export function InstagramPixelDbApp() {
             About
           </button>
         </nav>
-        <div className="account-actions">
-          {authUser ? (
-            <>
-              <span title={authUser.email}>{authUser.email}</span>
-              <button type="button" onClick={handleSignOut}>Sign out</button>
-            </>
-          ) : (
-            <>
-              <button type="button" onClick={() => { setAuthMode("register"); setAuthMessage(""); }}>Create account</button>
-              <button type="button" onClick={() => { setAuthMode("login"); setAuthMessage(""); }}>Sign in</button>
-            </>
-          )}
-        </div>
+        {authUser ? (
+          <div className="account-actions">
+            <span title={authUser.email}>{authUser.email}</span>
+            <button type="button" onClick={handleSignOut}>Sign out</button>
+          </div>
+        ) : null}
       </header>
 
       {authMode ? (
